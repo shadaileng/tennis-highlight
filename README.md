@@ -26,6 +26,7 @@ pip install -r requirements.txt
 ```bash
 uvicorn app.main:app --port 8000
 # then open http://localhost:8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Set `VERBOSE=true` for debug-level logs:

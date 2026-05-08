@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 
 from app.config import settings
+from app.pipeline.ffmpeg_utils import hwaccel_args
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ def _compute_median_background(
     cmd = [
         "ffmpeg",
         "-hide_banner", "-loglevel", "error",
-        "-hwaccel", "videotoolbox",
+        *hwaccel_args(),
         "-i", str(video_path),
         "-an",
         "-vf", f"fps={bg_fps:.6f},scale={target_w}:{target_h}",
@@ -280,7 +281,7 @@ def _scan_frames_against_background(
     cmd = [
         "ffmpeg",
         "-hide_banner", "-loglevel", "error",
-        "-hwaccel", "videotoolbox",
+        *hwaccel_args(),
         "-i", str(video_path),
         "-an",
         "-vf", f"fps={sample_fps},scale={target_w}:{target_h}",

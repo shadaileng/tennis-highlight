@@ -1,10 +1,30 @@
 import asyncio
 import json
 import logging
+import platform
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def hwaccel_args() -> list[str]:
+    """Return appropriate FFmpeg hardware acceleration arguments for the current platform.
+
+    Returns platform-specific hwaccel flags:
+    - Darwin (macOS): VideoToolbox hardware acceleration
+    - Linux: Software decoding (cross-platform compatibility)
+    - Windows: DXVA2 hardware acceleration
+    - Other: Empty list (software decoding fallback)
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return ["-hwaccel", "videotoolbox"]
+    elif system == "Windows":
+        return ["-hwaccel", "dxva2"]
+    else:
+        # Linux and other platforms: use software decoding for best compatibility
+        return []
 
 
 async def run(args: list[str]) -> None:

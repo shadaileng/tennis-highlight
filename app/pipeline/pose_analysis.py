@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from app.config import settings
+from app.pipeline.ffmpeg_utils import hwaccel_args
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,7 @@ def _iter_sampled_frames(
     cmd = [
         "ffmpeg",
         "-hide_banner", "-loglevel", "error",
-        "-hwaccel", "videotoolbox",
+        *hwaccel_args(),
         "-ss", f"{range_start_s:.3f}",
         "-i", str(video_path),
         "-t", f"{duration_s:.3f}",
