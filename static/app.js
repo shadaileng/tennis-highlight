@@ -18,6 +18,8 @@ const state = {
   allOnQueue: [], // remaining ON segments to play through in "all_on" mode
   calibrationVideoId: null,
   calibrationPoints: [],
+  ballTrajectory: [],
+  ballAnalysisId: null,
 };
 
 // Per-detector config schemas — single source of truth for which knobs/badges
@@ -680,6 +682,7 @@ async function loadEditor() {
   renderPosePanel();
   setupCanvas();
   setupPlayer();
+  loadBallTrajectory();
 }
 
 function renderAll() {
@@ -1209,6 +1212,7 @@ function setupPlayer() {
   player.addEventListener("timeupdate", () => {
     drawTimeline();
     renderPoseCurrent();
+    drawBallTrail();
     $("player-time").textContent = `${fmt(player.currentTime)} / ${fmt(state.duration)}`;
 
     if (state.playMode === "segment" && state.segmentEndS !== null) {
@@ -1270,6 +1274,209 @@ function drawPoseOverlay() {
 }
 
 $("pose-overlay-toggle").addEventListener("change", drawPoseOverlay);
+
+// Ball Trail --------------------------------------------------------------
+let trailParticles = [];
+const MAX_TRAIL_FRAMES = 30;
+const PARTICLE_COUNT = 15;
+
+class TrailParticle {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.vx = (Math.random() - 0.5) * 3;
+    this.vy = (Math.random() - 0.5) * 3;
+    this.life = 1.0;
+    this.decay = 0.02 + Math.random() * 0.04;
+    this.size = 2 + Math.random() * 4;
+    const hue = 50 + Math.random() * 20;
+    this.color = `hsl(${hue}, 100%, 60%)`;
+  }
+
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.life -= this.decay;
+    this.size *= 0.97;
+    this.vx *= 0.98;
+    this.vy *= 0.98;
+  }
+
+  draw(ctx) {
+    if (this.life <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = this.life * 0.8;
+    ctx.fillStyle = this.color;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, Math.max(0.5, this.size), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+async function loadBallTrajectory() {
+  if (!state.analysisId) return;
+  try {
+    const data = await fetch(`/ball-trajectory/${state.analysisId}`).then(r => r.json());
+    state.ballTrajectory = data.trajectory || [];
+    const panel = $("ball-trail-panel");
+    const summary = $("ball-trail-summary");
+    if (panel) panel.hidden = false;
+    if (summary && data.summary) {
+      summary.textContent = `${data.summary.detected_frames || 0} detections / ${data.summary.total_samples || 0} samples (${(data.summary.detection_rate || 0).toFixed(1)}%)`;
+    }
+  } catch (e) {
+    console.warn("No ball trajectory data:", e.message);
+    state.ballTrajectory = [];
+    const panel = $("ball-trail-panel");
+    if (panel) panel.hidden = true;
+  }
+}
+
+function drawBallTrail() {
+  const canvas = $("ball-trail-canvas");
+  if (!canvas || !$("ball-trail-toggle")?.checked) return;
+
+  const ctx = canvas.getContext("2d");
+  const video = $("player");
+  const rect = video.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.max(1, rect.width * dpr);
+  canvas.height = Math.max(1, rect.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+
+  if (!state.ballTrajectory.length) return;
+
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const currentTime = video.currentTime || 0;
+
+  const trailPoints = state.ballTrajectory
+    .filter(p => p.x !== null && p.time_s <= currentTime)
+    .filter(p => currentTime - p.time_s < 2.0)
+    .sort((a, b) => a.time_s - b.time_s);
+
+  if (trailPoints.length < 2) return;
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let i = 1; i < trailPoints.length; i++) {
+    const p0 = trailPoints[i - 1];
+    const p1 = trailPoints[i];
+    const age = (currentTime - p1.time_s) / 2.0;
+    const alpha = Math.max(0, 1 - age);
+    const lineWidth = 1 + alpha * 4;
+
+    ctx.beginPath();
+    ctx.moveTo(p0.x * w, p0.y * h);
+    ctx.lineTo(p1.x * w, p1.y * h);
+    ctx.strokeStyle = `rgba(255, 220, 50, ${alpha * 0.6})`;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+  }
+
+  const currentPoint = trailPoints[trailPoints.length - 1];
+  if (currentPoint && (currentTime - currentPoint.time_s) < 0.15) {
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      trailParticles.push(new TrailParticle(
+        currentPoint.x * w + (Math.random() - 0.5) * 12,
+        currentPoint.y * h + (Math.random() - 0.5) * 12
+      ));
+    }
+  }
+
+  trailParticles = trailParticles.filter(p => p.life > 0);
+  for (const p of trailParticles) {
+    p.update();
+    p.draw(ctx);
+  }
+
+  if (currentPoint && (currentTime - currentPoint.time_s) < 0.2) {
+    const bx = currentPoint.x * w;
+    const by = currentPoint.y * h;
+
+    ctx.save();
+    ctx.shadowBlur = 25;
+    ctx.shadowColor = "rgba(255, 200, 0, 0.8)";
+    ctx.fillStyle = "rgba(255, 255, 100, 0.25)";
+    ctx.beginPath();
+    ctx.arc(bx, by, 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = "rgba(255, 220, 0, 0.9)";
+    ctx.fillStyle = "rgba(255, 230, 50, 0.9)";
+    ctx.beginPath();
+    ctx.arc(bx, by, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+$("analyze-ball-btn").addEventListener("click", async () => {
+  if (!state.analysisId) return;
+  const btn = $("analyze-ball-btn");
+  btn.disabled = true;
+  btn.textContent = "Analyzing...";
+  try {
+    const r = await fetch(`/ball-trajectory/${state.analysisId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sample_fps: 4.0 }),
+    });
+    const data = await r.json();
+    state.ballAnalysisId = data.ball_analysis_id;
+    btn.textContent = "Analysis started...";
+    setTimeout(checkBallAnalysisStatus, 2000);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Analyze Ball Trajectory";
+    alert("Failed to start ball analysis: " + e.message);
+  }
+});
+
+async function checkBallAnalysisStatus() {
+  if (!state.ballAnalysisId) return;
+  try {
+    const analyses = await fetch("/analyses").then(r => r.json());
+    const ball = analyses.find(a => a.analysis_id === state.ballAnalysisId);
+    if (ball) {
+      if (ball.status === "done") {
+        await loadBallTrajectory();
+        const btn = $("analyze-ball-btn");
+        btn.disabled = false;
+        btn.textContent = "Analyze Ball Trajectory";
+      } else if (ball.status === "analyzing") {
+        const btn = $("analyze-ball-btn");
+        btn.textContent = `Analyzing... ${Math.round(ball.progress_percent || 0)}%`;
+        setTimeout(checkBallAnalysisStatus, 1000);
+      } else if (ball.status === "error") {
+        const btn = $("analyze-ball-btn");
+        btn.disabled = false;
+        btn.textContent = "Analyze Ball Trajectory";
+      } else {
+        setTimeout(checkBallAnalysisStatus, 1000);
+      }
+    }
+  } catch (e) {
+    console.warn("Error checking ball analysis status:", e.message);
+  }
+}
+
+$("ball-trail-toggle").addEventListener("change", () => {
+  if (!$("ball-trail-toggle").checked) {
+    trailParticles = [];
+    const canvas = $("ball-trail-canvas");
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+});
 
 function playSegment(i) {
   const seg = state.segments[i];

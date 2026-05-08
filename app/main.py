@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import init_db
-from app.routers import analysis, download, export, pose, process, segments, status, upload, videos
+from app.routers import analysis, ball, download, export, pose, process, segments, status, upload, videos
 
 
 def _configure_logging() -> None:
@@ -52,6 +52,7 @@ app.include_router(pose.router)
 app.include_router(segments.router)
 app.include_router(export.router)
 app.include_router(download.router)
+app.include_router(ball.router)
 
 app.mount("/uploads", StaticFiles(directory=str(settings.upload_dir)), name="uploads")
 app.mount("/static", StaticFiles(directory="static"), name="static")

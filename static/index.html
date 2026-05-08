@@ -157,6 +157,7 @@
         <div id="player-wrap">
           <video id="player" controls preload="metadata"></video>
           <canvas id="pose-overlay"></canvas>
+          <canvas id="ball-trail-canvas"></canvas>
         </div>
         <div class="player-controls">
           <button id="play-all-on">Play all ON segments</button>
@@ -192,6 +193,15 @@
           </thead>
           <tbody id="pose-frames-tbody"></tbody>
         </table>
+      </div>
+
+      <div class="card" id="ball-trail-panel" hidden>
+        <div class="row-between">
+          <h2>Tennis Ball Trail</h2>
+          <label class="muted"><input id="ball-trail-toggle" type="checkbox" /> Show trail</label>
+        </div>
+        <div id="ball-trail-summary" class="muted"></div>
+        <button id="analyze-ball-btn" class="primary">Analyze Ball Trajectory</button>
       </div>
 
       <div class="card">

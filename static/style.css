@@ -149,6 +149,13 @@ video {
   height: 100%;
   pointer-events: none;
 }
+#ball-trail-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
 .player-controls {
   display: flex; justify-content: space-between; align-items: center;
   margin-top: 8px;
