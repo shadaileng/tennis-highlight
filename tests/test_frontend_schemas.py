@@ -170,7 +170,7 @@ class HtmlContractTests(unittest.TestCase):
         )
 
     def test_data_algorithms_reference_known_detectors(self):
-        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo"}
+        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo", "ball_tracking_color"}
         for match in re.finditer(r'data-algorithms="([^"]+)"', INDEX_HTML):
             for algo in match.group(1).split():
                 with self.subTest(algorithm=algo):
@@ -198,7 +198,7 @@ class HtmlContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         options = set(re.findall(r'value="([^"]+)"', match.group(1)))
-        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo"}
+        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo", "ball_tracking_color"}
         self.assertEqual(
             options,
             valid,

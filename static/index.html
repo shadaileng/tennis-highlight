@@ -26,9 +26,10 @@
             <option value="median_frame">Median frame detector</option>
             <option value="median_court_roi">Court ROI median detector</option>
             <option value="pose_skeleton_yolo">YOLO pose skeleton</option>
+            <option value="ball_tracking_color">Ball trajectory trail</option>
           </select>
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo ball_tracking_color">
           <span>sample_fps <button type="button" class="help-dot" data-help-key="sample_fps" aria-label="Help">?</button></span>
           <input id="start-sample-fps" type="number" min="0.1" step="0.1" value="2.0" />
         </label>
@@ -60,19 +61,19 @@
           <span>pose_imgsz <button type="button" class="help-dot" data-help-key="pose_imgsz" aria-label="Help">?</button></span>
           <input id="start-pose-imgsz" type="number" min="320" step="32" value="640" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo ball_tracking_color">
           <span>range_start <button type="button" class="help-dot" data-help-key="range_start_s" aria-label="Help">?</button></span>
           <input id="start-range-start" type="text" value="0:00.0" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo ball_tracking_color">
           <span>range_end <button type="button" class="help-dot" data-help-key="range_end_s" aria-label="Help">?</button></span>
           <input id="start-range-end" type="text" value="0:00.0" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo ball_tracking_color">
           <span>start slider</span>
           <input id="start-range-start-slider" type="range" min="0" max="0" step="0.5" value="0" />
         </label>
-        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo">
+        <label class="start-config" data-algorithms="median_frame median_court_roi pose_skeleton_yolo ball_tracking_color">
           <span>end slider</span>
           <input id="start-range-end-slider" type="range" min="0" max="0" step="0.5" value="0" />
         </label>

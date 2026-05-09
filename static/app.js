@@ -48,6 +48,12 @@ const DETECTOR_CONFIGS = {
     "duration_s", "sample_count",
     "detector", "detector_version",
   ],
+  ball_tracking_color: [
+    "sample_fps",
+    "range_start_s", "range_end_s",
+    "duration_s", "sample_count",
+    "detector", "detector_version",
+  ],
 };
 
 const HELP_TEXT = {
@@ -164,7 +170,8 @@ function renderLibrary(videos) {
 function renderAnalyses(analyses) {
   const tbody = $("analyses-tbody");
   tbody.innerHTML = "";
-  $("analyses-section").hidden = !analyses.length;
+  // Don't show analyses section when in editor view
+  $("analyses-section").hidden = !$("analyses-section").hidden ? true : !analyses.length;
   for (const a of analyses) {
     const tr = document.createElement("tr");
     const fileTd = document.createElement("td");
@@ -211,6 +218,13 @@ function renderAnalyses(analyses) {
       del.addEventListener("click", () => deleteAnalysis(a));
       actTd.appendChild(del);
     }
+    if (a.status === "pending" || a.status === "analyzing") {
+      const cancel = document.createElement("button");
+      cancel.textContent = "Cancel";
+      cancel.style.marginLeft = "6px";
+      cancel.addEventListener("click", () => deleteAnalysis(a));
+      actTd.appendChild(cancel);
+    }
     const range = document.createElement("div");
     range.className = "muted";
     if (typeof a.range_start_s === "number" && typeof a.range_end_s === "number") {
@@ -223,7 +237,8 @@ function renderAnalyses(analyses) {
 }
 
 async function deleteAnalysis(a) {
-  if (!confirm(`Delete failed analysis "${a.algorithm}" for "${a.filename}"?`)) return;
+  const action = a.status === "pending" || a.status === "analyzing" ? "Cancel" : "Delete";
+  if (!confirm(`${action} analysis "${a.algorithm}" for "${a.filename}"?`)) return;
   const r = await fetch(`/analyses/${a.analysis_id}`, { method: "DELETE" });
   if (!r.ok) {
     alert("Could not delete analysis: " + (await r.text()));
@@ -276,6 +291,13 @@ async function reanalyzeVideo(videoId) {
 async function startAnalysis(videoId) {
   const media = state.media.find((m) => m.video_id === videoId);
   const algorithm = $("start-algorithm").value;
+  
+  // Handle ball trajectory algorithm
+  if (algorithm === "ball_tracking_color") {
+    await startBallTrajectoryAnalysis(videoId);
+    return;
+  }
+  
   if (algorithm === "median_court_roi" && !(media && media.has_court_calibration)) {
     alert("Mark the court for this video before starting the Court ROI detector.");
     return;
@@ -312,6 +334,118 @@ async function startAnalysis(videoId) {
   }
   await refreshLibrary();
   pollAnalyses();
+}
+
+async function startBallTrajectoryAnalysis(videoId) {
+  const media = state.media.find((m) => m.video_id === videoId);
+  const sampleFps = parseFloat($("start-sample-fps").value || "4.0");
+  const rangeStart = parseTime($("start-range-start").value) ?? 0;
+  const rangeEnd = parseTime($("start-range-end").value) ?? media.duration_s;
+
+  try {
+    const r = await fetch(`/ball-trajectory-from-video/${videoId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        sample_fps: sampleFps,
+        range_start_s: rangeStart,
+        range_end_s: rangeEnd,
+      }),
+    });
+    
+    if (!r.ok) {
+      alert("Could not start ball trajectory analysis: " + (await r.text()));
+      return;
+    }
+    
+    const data = await r.json();
+    state.ballAnalysisId = data.ball_analysis_id;
+    state.videoId = videoId;
+    state.duration = media.duration_s || 0;
+    
+    // Store the video ID for later use
+    sessionStorage.setItem("pendingBallAnalysisId", data.ball_analysis_id);
+    
+    await refreshLibrary();
+    pollBallAnalysis(data.ball_analysis_id, videoId);
+  } catch (e) {
+    alert("Failed to start ball trajectory analysis: " + e.message);
+  }
+}
+
+async function pollBallAnalysis(ballAnalysisId, videoId) {
+  while (true) {
+    const analyses = await fetch("/analyses").then(r => r.json());
+    const ball = analyses.find(a => a.analysis_id === ballAnalysisId);
+    
+    if (ball) {
+      if (ball.status === "done") {
+        // Ball analysis done, now create a dummy analysis entry for the editor
+        sessionStorage.setItem("ballAnalysisVideoId", videoId);
+        sessionStorage.setItem("ballAnalysisId", ballAnalysisId);
+        
+        // Find the media and create a synthetic analysis entry
+        const media = state.media.find(m => m.video_id === videoId);
+        if (media) {
+          state.videoId = videoId;
+          state.analysisId = ballAnalysisId;
+          state.duration = media.duration_s || 0;
+          
+          // Create a minimal segments array (full video)
+          state.segments = [{
+            start_s: 0,
+            end_s: media.duration_s || 0,
+            is_on: true,
+            source: "ball_trajectory",
+            decision_stage: "ball_analysis",
+          }];
+          
+          // Load the editor with ball trajectory data
+          // await loadEditorWithBallTrajectory(videoId, ballAnalysisId);
+        }
+        await refreshLibrary();
+        return;
+      } else if (ball.status === "error") {
+        alert("Ball trajectory analysis failed: " + (ball.error_msg || "Unknown error"));
+        await refreshLibrary();
+        return;
+      }
+    }
+    
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+async function loadEditorWithBallTrajectory(videoId, ballAnalysisId) {
+  $("analyses-section").hidden = true;
+  state.pollingAnalyses = false;  // Stop any ongoing analysis polling
+  const [urlR] = await Promise.all([
+    fetch(`/video-file/${videoId}`).then(r => r.json()),
+  ]);
+  
+  state.videoUrl = urlR.url;
+  state.analysisId = ballAnalysisId;
+  
+  $("player").src = state.videoUrl;
+  $("editor-title").textContent = `Ball Trajectory Analysis`;
+  showOnly("editor-section");
+  
+  // Setup canvas and player
+  setupCanvas();
+  setupPlayer();
+  
+  // Load ball trajectory data
+  await loadBallTrajectory();
+  
+  // Auto-enable ball trail display
+  $("ball-trail-toggle").checked = true;
+  drawBallTrail();
+  
+  // Show ball trail panel
+  const panel = $("ball-trail-panel");
+  if (panel) panel.hidden = false;
+  
+  renderAll();
 }
 
 function readStartConfig(algorithm) {
@@ -628,13 +762,15 @@ async function pollStatus() {
 async function pollAnalyses() {
   if (state.pollingAnalyses) return;
   state.pollingAnalyses = true;
-  while (true) {
+  while (state.pollingAnalyses) {
     const analyses = await fetch("/analyses").then((r) => r.json());
     state.analyses = analyses;
     renderAnalyses(analyses);
+    if (!state.pollingAnalyses) break;
     const active = analyses.some((a) => a.status === "pending" || a.status === "analyzing");
     if (!active) {
       state.pollingAnalyses = false;
+      if (!$("editor-section").hidden) break;
       await refreshLibrary();
       return;
     }
@@ -657,6 +793,8 @@ $("back-to-library-btn").addEventListener("click", async () => {
 });
 
 async function loadEditor() {
+  $("analyses-section").hidden = true;
+  state.pollingAnalyses = false;  // Stop any ongoing analysis polling
   const [segR, urlR, analysisR] = await Promise.all([
     fetch(`/analysis-segments/${state.analysisId}`).then((r) => r.json()),
     fetch(`/video-file/${state.videoId}`).then((r) => r.json()),

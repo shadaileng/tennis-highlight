@@ -14,12 +14,94 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str, float | None], None]
 
-BALL_ALGORITHM = "ball_tracking_yolo"
-BALL_ARTIFACT_VERSION = 1
+BALL_ALGORITHM = "ball_tracking_color"
+BALL_ARTIFACT_VERSION = 2
 BALL_TARGET_WIDTH = 640
-DEFAULT_BALL_MODEL = "yolov8n.pt"
-BALL_CONF_THRESHOLD = 0.25
-IOU_TRACKING_THRESHOLD = 0.3
+
+# Tennis ball color detection thresholds (HSV)
+# Yellow-green tennis ball: H: 25-70, S: 100-255, V: 100-255
+HUE_MIN, HUE_MAX = 20, 70
+SAT_MIN, SAT_MAX = 80, 255
+VAL_MIN, VAL_MAX = 100, 255
+
+# Ball size constraints (relative to frame)
+MIN_BALL_AREA_RATIO = 0.00005
+MAX_BALL_AREA_RATIO = 0.003
+TRACKING_DISTANCE_THRESHOLD = 0.15
+
+
+def _detect_tennis_ball_hsv(
+    frame: np.ndarray,
+    prev_pos: tuple[float, float] | None = None
+) -> tuple[float, float, float] | None:
+    """Detect tennis ball using HSV color segmentation.
+    
+    Returns: (center_x, center_y, confidence) or None if no ball found
+    center_x, center_y are normalized to [0, 1]
+    """
+    h, w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    # Create mask for tennis ball color (yellow-green)
+    lower = np.array([HUE_MIN, SAT_MIN, VAL_MIN])
+    upper = np.array([HUE_MAX, SAT_MAX, VAL_MAX])
+    mask = cv2.inRange(hsv, lower, upper)
+    
+    # Morphological operations to reduce noise
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.erode(mask, kernel, iterations=1)
+    mask = cv2.dilate(mask, kernel, iterations=2)
+    
+    # Find contours
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return None
+    
+    max_area = 0
+    best_ball = None
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        min_area = h * w * MIN_BALL_AREA_RATIO
+        max_area_limit = h * w * MAX_BALL_AREA_RATIO
+        
+        if area < min_area or area > max_area_limit:
+            continue
+        
+        # Get bounding box
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        
+        # Check circularity (tennis balls are round)
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter < 1:
+            continue
+        circularity = 4 * np.pi * area / (perimeter * perimeter)
+        if circularity < 0.3:  # Not round enough
+            continue
+        
+        # Prefer larger, more circular detections
+        score = area * circularity
+        
+        if score > max_area:
+            max_area = score
+            cx = (x + bw / 2) / w
+            cy = (y + bh / 2) / h
+            # Confidence based on size and circularity
+            conf = min(1.0, circularity * 0.7 + min(area / (h * w * 0.001), 1.0) * 0.3)
+            best_ball = (cx, cy, conf)
+    
+    # If we have a previous position, prefer detections near it
+    if best_ball and prev_pos:
+        prev_x, prev_y = prev_pos
+        cx, cy, conf = best_ball
+        dist = np.sqrt((cx - prev_x)**2 + (cy - prev_y)**2)
+        if dist > TRACKING_DISTANCE_THRESHOLD:
+            # Too far from previous, might be false positive
+            return None
+        best_ball = (cx, cy, min(conf, 1.0 - dist))
+    
+    return best_ball
 
 
 def analyze_ball_trajectory(
@@ -30,18 +112,9 @@ def analyze_ball_trajectory(
     range_start_s: float,
     range_end_s: float,
     progress_cb: ProgressCallback | None = None,
-    model_name: str = DEFAULT_BALL_MODEL,
-    conf_threshold: float = BALL_CONF_THRESHOLD,
     image_size: int = BALL_TARGET_WIDTH,
 ) -> tuple[Path, dict]:
-    """Detect balls and generate trajectory data."""
-    try:
-        from ultralytics import YOLO
-    except Exception as e:
-        raise RuntimeError(
-            "Ultralytics required. Install with `.venv/bin/pip install ultralytics`."
-        ) from e
-
+    """Detect tennis balls using color segmentation and generate trajectory data."""
     from app.pipeline.motion_analysis import _probe_video
     info = _probe_video(video_path)
     target_w = int(image_size)
@@ -50,15 +123,13 @@ def analyze_ball_trajectory(
     total_samples = max(1, int(round(duration * sample_fps)))
 
     if progress_cb:
-        progress_cb(1.0, f"Loading ball model {model_name}", None)
-
-    model = YOLO(model_name)
+        progress_cb(1.0, "Initializing ball detection", None)
 
     if progress_cb:
         progress_cb(5.0, f"Detecting balls in {total_samples:,} samples", None)
 
     trajectory_points: list[dict] = []
-    prev_ball = None
+    prev_ball_pos: tuple[float, float] | None = None
     frame_idx = 0
     started = time.monotonic()
 
@@ -88,61 +159,24 @@ def analyze_ball_trajectory(
                 frame = np.frombuffer(buf, dtype=np.uint8).reshape(target_h, target_w, 3)
                 current_time = range_start_s + (frame_idx / sample_fps)
 
-                results = model.predict(
-                    frame,
-                    conf=float(conf_threshold),
-                    imgsz=int(image_size),
-                    classes=[32],
-                    verbose=False
-                )[0]
+                # Detect tennis ball using color
+                ball_det = _detect_tennis_ball_hsv(frame, prev_ball_pos)
 
-                balls_in_frame = []
-                if results.boxes and len(results.boxes) > 0:
-                    for box in results.boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        conf = float(box.conf[0])
-
-                        cx = float(((x1 + x2) / 2) / target_w)
-                        cy = float(((y1 + y2) / 2) / target_h)
-
-                        balls_in_frame.append({
-                            "x": cx,
-                            "y": cy,
-                            "confidence": conf,
-                            "bbox": {
-                                "x1": float(x1 / target_w),
-                                "y1": float(y1 / target_h),
-                                "x2": float(x2 / target_w),
-                                "y2": float(y2 / target_h),
-                            }
-                        })
-
-                current_ball = None
-                if balls_in_frame:
-                    if prev_ball is None:
-                        current_ball = max(balls_in_frame, key=lambda b: b["confidence"])
-                    else:
-                        best_dist = float("inf")
-                        for ball in balls_in_frame:
-                            dist = np.sqrt(
-                                (ball["x"] - prev_ball["x"])**2 +
-                                (ball["y"] - prev_ball["y"])**2
-                            )
-                            if dist < best_dist:
-                                best_dist = dist
-                                current_ball = ball
-                        if best_dist > IOU_TRACKING_THRESHOLD:
-                            current_ball = None
-
-                if current_ball:
+                if ball_det:
+                    cx, cy, conf = ball_det
                     trajectory_points.append({
                         "time_s": float(current_time),
-                        "x": current_ball["x"],
-                        "y": current_ball["y"],
-                        "confidence": current_ball["confidence"],
-                        "bbox": current_ball["bbox"],
+                        "x": cx,
+                        "y": cy,
+                        "confidence": conf,
+                        "bbox": {
+                            "x1": float(cx - 0.01),
+                            "y1": float(cy - 0.01),
+                            "x2": float(cx + 0.01),
+                            "y2": float(cy + 0.01),
+                        },
                     })
-                    prev_ball = {"x": current_ball["x"], "y": current_ball["y"]}
+                    prev_ball_pos = (cx, cy)
                 else:
                     trajectory_points.append({
                         "time_s": float(current_time),
@@ -177,8 +211,6 @@ def analyze_ball_trajectory(
     metadata = {
         "detector": BALL_ALGORITHM,
         "detector_version": BALL_ARTIFACT_VERSION,
-        "model_name": model_name,
-        "conf_threshold": float(conf_threshold),
         "image_size": int(image_size),
         "duration_s": float(video_duration_s),
         "range_start_s": float(range_start_s),
@@ -190,7 +222,8 @@ def analyze_ball_trajectory(
     }
 
     detected_count = sum(1 for p in trajectory_points if p["x"] is not None)
-    avg_conf = float(np.mean([p["confidence"] for p in trajectory_points if p["x"] is not None])) if detected_count > 0 else 0
+    detected_points = [p for p in trajectory_points if p["x"] is not None]
+    avg_conf = float(np.mean([p["confidence"] for p in detected_points])) if detected_points else 0
     summary = {
         "total_samples": len(trajectory_points),
         "detected_frames": detected_count,

@@ -22,6 +22,7 @@ from app.pipeline.motion_analysis import (
     normalize_knobs,
 )
 from app.pipeline.pose_analysis import POSE_ALGORITHM, analyze_pose_to_artifact
+from app.pipeline.ball_tracking import BALL_ALGORITHM, analyze_ball_trajectory
 from app.pipeline.video_editor import export_segments
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,36 @@ async def run_analysis(analysis_id: str) -> None:
                 float(config.get("pose_conf", 0.25)),
                 int(config.get("pose_imgsz", 640)),
             )
+        elif analysis["algorithm"] == BALL_ALGORITHM:
+            # Ball trajectory analysis - creates ball artifact but no segments
+            await asyncio.to_thread(
+                analyze_ball_trajectory,
+                analysis_id,
+                video_path,
+                duration,
+                float(knobs.get("sample_fps", 4.0)),
+                float(analysis["range_start_s"] or 0.0),
+                float(analysis["range_end_s"] or duration),
+                progress_cb,
+            )
+            # Ball analysis doesn't produce segments, create minimal result
+            artifact_path = settings.analysis_dir / f"{analysis_id}.ball.json.gz"
+            timeline = []
+            analysis_result = {"summary": {"ball_analysis": True}}
+            
+            # Mark as complete with no segments
+            await complete_analysis(
+                analysis_id,
+                artifact_path=str(artifact_path),
+                instant_knobs_json=json.dumps({"sample_fps": knobs.get("sample_fps", 4.0)}),
+            )
+            # Log and return early since we already called complete_analysis
+            elapsed = time.monotonic() - started
+            logger.info(
+                "ball trajectory analysis complete: analysis_id=%s elapsed=%.1fs",
+                analysis_id, elapsed,
+            )
+            return
         else:
             court_calibration = None
             if analysis["algorithm"] == "median_court_roi":

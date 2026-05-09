@@ -14,6 +14,7 @@ from app.database import (
 from app.models import AnalysisRunSummary, DetectorKnobs
 from app.pipeline.motion_analysis import default_knobs, normalize_knobs
 from app.pipeline.pose_analysis import POSE_ALGORITHM
+from app.pipeline.ball_tracking import BALL_ALGORITHM
 from app.pipeline.orchestrator import run_analysis
 
 router = APIRouter()
@@ -37,7 +38,7 @@ async def start_processing(
     if video is None:
         raise HTTPException(404, "video not found")
     req = payload or StartAnalysisRequest()
-    if req.algorithm not in {"median_frame", "median_court_roi", POSE_ALGORITHM}:
+    if req.algorithm not in {"median_frame", "median_court_roi", POSE_ALGORITHM, BALL_ALGORITHM}:
         raise HTTPException(400, "unsupported algorithm")
     if req.algorithm == "median_court_roi" and not video["court_calibration_json"]:
         raise HTTPException(400, "court calibration is required for median_court_roi")
