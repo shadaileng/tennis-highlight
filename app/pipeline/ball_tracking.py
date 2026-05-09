@@ -1,3 +1,20 @@
+"""
+网球检测模块 - 使用 YOLO 模型进行网球检测
+
+模型文件说明:
+    - yolo5_last.pt: YOLOv5 训练的网球检测模型 (来自 tennis_analysis 项目)
+      下载链接: https://drive.google.com/file/d/1UZwiG1jkWgce9lNhxJ2L0NVjX1vGM05U/view
+    - keypoints_model.pth: 网球场地关键点模型 (用于球场标定)
+
+模型加载方式:
+    使用 ultralytics 库加载 YOLO 模型:
+        from ultralytics import YOLO
+        model = YOLO("models/yolo5_last.pt")
+        results = model.predict(frame, conf=0.15)
+
+注意: 模型文件名不要修改，与 tennis_analysis 项目保持一致
+"""
+
 import gzip
 import json
 import logging
@@ -9,99 +26,175 @@ from typing import Callable
 
 import cv2
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str, float | None], None]
 
-BALL_ALGORITHM = "ball_tracking_color"
-BALL_ARTIFACT_VERSION = 2
+# 使用 YOLO 模型进行网球检测 (替换原来的 HSV 颜色检测)
+BALL_ALGORITHM = "ball_tracking_yolo"
+BALL_ARTIFACT_VERSION = 3
 BALL_TARGET_WIDTH = 640
 
-# Tennis ball color detection thresholds (HSV)
-# Yellow-green tennis ball: H: 25-70, S: 100-255, V: 100-255
-HUE_MIN, HUE_MAX = 20, 70
-SAT_MIN, SAT_MAX = 80, 255
-VAL_MIN, VAL_MAX = 100, 255
+# 模型文件路径 (不要修改文件名，与 tennis_analysis 项目保持一致)
+# yolo5_last.pt: YOLOv5 训练的网球检测模型
+# 来源: https://github.com/abdullahtarek/tennis_analysis
+# 路径: /workspace/tennis-highlight/models/yolo5_last.pt
+BALL_MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "yolo5_last.pt"
 
-# Ball size constraints (relative to frame)
-MIN_BALL_AREA_RATIO = 0.00005
-MAX_BALL_AREA_RATIO = 0.003
+# 追踪距离阈值 (归一化坐标) - 网球高速移动时阈值
+# 0.15 相当于在 640 宽度图像上约 96 像素，更严格的追踪减少误检
 TRACKING_DISTANCE_THRESHOLD = 0.15
 
+# 全局模型缓存 (懒加载)
+_ball_model = None
 
-def _detect_tennis_ball_hsv(
-    frame: np.ndarray,
-    prev_pos: tuple[float, float] | None = None
-) -> tuple[float, float, float] | None:
-    """Detect tennis ball using HSV color segmentation.
+
+def _interpolate_trajectory(trajectory_points: list[dict]) -> list[dict]:
+    """使用 pandas 插值填充缺失的球位置，使轨迹更平滑连续
     
-    Returns: (center_x, center_y, confidence) or None if no ball found
-    center_x, center_y are normalized to [0, 1]
+    参考 tennis_analysis 项目: https://github.com/qchen34/Tennis_AI_mainland
+    当某帧未检测到网球时，使用线性插值计算位置，使轨迹不会断裂
+    """
+    if not trajectory_points:
+        return trajectory_points
+    
+    # 转换为 DataFrame 格式
+    rows = []
+    for p in trajectory_points:
+        if p["x"] is not None and p["y"] is not None:
+            rows.append({
+                "time_s": p["time_s"],
+                "x": p["x"],
+                "y": p["y"],
+                "confidence": p["confidence"],
+                "bbox": p.get("bbox"),
+            })
+        else:
+            rows.append({
+                "time_s": p["time_s"],
+                "x": np.nan,
+                "y": np.nan,
+                "confidence": 0.0,
+                "bbox": None,
+            })
+    
+    df = pd.DataFrame(rows)
+    
+    # 线性插值填充缺失值
+    df['x'] = df['x'].interpolate(method='linear')
+    df['y'] = df['y'].interpolate(method='linear')
+    
+    # 处理首尾的 NaN 值（使用向前/向后填充）
+    df['x'] = df['x'].bfill().ffill()
+    df['y'] = df['y'].bfill().ffill()
+    
+    # 插值后的点置信度设为 0.5
+    df['confidence'] = 0.5
+    
+    # 转回原格式
+    result = []
+    for i, row in df.iterrows():
+        result.append({
+            "time_s": float(row['time_s']),
+            "x": float(row['x']),
+            "y": float(row['y']),
+            "confidence": float(row['confidence']),
+            "bbox": row.get('bbox'),
+        })
+    
+    return result
+
+
+def _get_ball_model():
+    """获取 YOLO 网球检测模型 (懒加载，避免重复加载)
+    
+    依赖 ultralytics 库，安装方式: pip install ultralytics
+    """
+    global _ball_model
+    if _ball_model is None:
+        try:
+            from ultralytics import YOLO
+        except Exception as e:
+            raise RuntimeError(
+                "ultralytics is required for YOLO ball detection. "
+                "Install it with `.venv/bin/pip install ultralytics`."
+            ) from e
+        
+        if not BALL_MODEL_PATH.exists():
+            raise RuntimeError(
+                f"Ball model not found: {BALL_MODEL_PATH}\n"
+                f"Please download from: https://drive.google.com/file/d/1UZwiG1jkWgce9lNhxJ2L0NVjX1vGM05U/view"
+            )
+        
+        logger.info(f"Loading ball detection model from {BALL_MODEL_PATH}")
+        _ball_model = YOLO(str(BALL_MODEL_PATH))
+    
+    return _ball_model
+
+
+def _detect_tennis_ball_yolo(
+    frame: np.ndarray,
+    model,
+    prev_pos: tuple[float, float] | None = None
+) -> tuple[float, float, float, dict | None] | None:
+    """使用 YOLO 模型检测网球
+    
+    参数:
+        frame: 输入帧 (BGR 格式)
+        model: YOLO 模型实例 (来自 ultralytics)
+        prev_pos: 上一帧中网球的位置 (归一化坐标), 用于追踪
+    
+    返回:
+        (center_x, center_y, confidence, bbox) 或 None (如果没有检测到网球)
+        - center_x, center_y: 归一化到 [0, 1] 的坐标
+        - confidence: 检测置信度 [0, 1]
+        - bbox: 边界框字典 {"x1", "y1", "x2", "y2"} (归一化坐标)
+    
+    模型推理说明:
+        使用 YOLOv5 模型进行网球检测，置信度阈值设为 0.08
+        results.boxes 包含检测结果，包含 xyxy (边界框) 和 conf (置信度)
     """
     h, w = frame.shape[:2]
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # Create mask for tennis ball color (yellow-green)
-    lower = np.array([HUE_MIN, SAT_MIN, VAL_MIN])
-    upper = np.array([HUE_MAX, SAT_MAX, VAL_MAX])
-    mask = cv2.inRange(hsv, lower, upper)
+    # 使用 YOLO 模型进行推理 (置信度阈值 0.15，减少误检)
+    results = model.predict(frame, conf=0.15, verbose=False)[0]
     
-    # Morphological operations to reduce noise
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask = cv2.erode(mask, kernel, iterations=1)
-    mask = cv2.dilate(mask, kernel, iterations=2)
-    
-    # Find contours
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    if not contours:
+    # 如果没有检测到目标，返回 None
+    if results.boxes is None or len(results.boxes) == 0:
         return None
     
-    max_area = 0
-    best_ball = None
+    # 获取检测框 (取置信度最高的一个)
+    boxes = results.boxes
+    # 按置信度排序，取最好的检测
+    best_idx = int(boxes.conf.argmax())
+    x1, y1, x2, y2 = boxes.xyxy[best_idx].cpu().numpy()
+    conf = float(boxes.conf[best_idx].cpu().numpy())
     
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        min_area = h * w * MIN_BALL_AREA_RATIO
-        max_area_limit = h * w * MAX_BALL_AREA_RATIO
-        
-        if area < min_area or area > max_area_limit:
-            continue
-        
-        # Get bounding box
-        x, y, bw, bh = cv2.boundingRect(cnt)
-        
-        # Check circularity (tennis balls are round)
-        perimeter = cv2.arcLength(cnt, True)
-        if perimeter < 1:
-            continue
-        circularity = 4 * np.pi * area / (perimeter * perimeter)
-        if circularity < 0.3:  # Not round enough
-            continue
-        
-        # Prefer larger, more circular detections
-        score = area * circularity
-        
-        if score > max_area:
-            max_area = score
-            cx = (x + bw / 2) / w
-            cy = (y + bh / 2) / h
-            # Confidence based on size and circularity
-            conf = min(1.0, circularity * 0.7 + min(area / (h * w * 0.001), 1.0) * 0.3)
-            best_ball = (cx, cy, conf)
+    # 计算中心点 (归一化到 [0, 1])
+    cx = float((x1 + x2) / 2 / w)
+    cy = float((y1 + y2) / 2 / h)
     
-    # If we have a previous position, prefer detections near it
-    if best_ball and prev_pos:
+    # 边界框 (归一化坐标)
+    bbox = {
+        "x1": float(x1 / w),
+        "y1": float(y1 / h),
+        "x2": float(x2 / w),
+        "y2": float(y2 / h),
+    }
+    
+    # 如果提供了上一帧的位置，进行追踪过滤 (避免误检)
+    if prev_pos:
         prev_x, prev_y = prev_pos
-        cx, cy, conf = best_ball
         dist = np.sqrt((cx - prev_x)**2 + (cy - prev_y)**2)
         if dist > TRACKING_DISTANCE_THRESHOLD:
-            # Too far from previous, might be false positive
+            # 距离太远，可能是误检
             return None
-        best_ball = (cx, cy, min(conf, 1.0 - dist))
+        # 根据距离调整置信度
+        conf = min(conf, 1.0 - dist)
     
-    return best_ball
+    return (cx, cy, conf, bbox)
 
 
 def analyze_ball_trajectory(
@@ -114,16 +207,25 @@ def analyze_ball_trajectory(
     progress_cb: ProgressCallback | None = None,
     image_size: int = BALL_TARGET_WIDTH,
 ) -> tuple[Path, dict]:
-    """Detect tennis balls using color segmentation and generate trajectory data."""
+    """使用 YOLO 模型检测网球并生成轨迹数据
+    
+    模型说明:
+        - 使用 yolo5_last.pt (YOLOv5 训练的网球检测模型)
+        - 来自 tennis_analysis 项目: https://github.com/abdullahtarek/tennis_analysis
+        - 依赖 ultralytics 库
+    """
     from app.pipeline.motion_analysis import _probe_video
+    
+    # 加载 YOLO 网球检测模型
+    if progress_cb:
+        progress_cb(1.0, f"Loading ball model: {BALL_MODEL_PATH.name}", None)
+    model = _get_ball_model()
+    
     info = _probe_video(video_path)
     target_w = int(image_size)
     target_h = max(2, ((info["height"] * target_w) // info["width"]) & ~1)
     duration = max(0.0, range_end_s - range_start_s)
     total_samples = max(1, int(round(duration * sample_fps)))
-
-    if progress_cb:
-        progress_cb(1.0, "Initializing ball detection", None)
 
     if progress_cb:
         progress_cb(5.0, f"Detecting balls in {total_samples:,} samples", None)
@@ -159,22 +261,17 @@ def analyze_ball_trajectory(
                 frame = np.frombuffer(buf, dtype=np.uint8).reshape(target_h, target_w, 3)
                 current_time = range_start_s + (frame_idx / sample_fps)
 
-                # Detect tennis ball using color
-                ball_det = _detect_tennis_ball_hsv(frame, prev_ball_pos)
+                # 使用 YOLO 模型检测网球 (替换原来的 HSV 颜色检测)
+                ball_det = _detect_tennis_ball_yolo(frame, model, prev_ball_pos)
 
                 if ball_det:
-                    cx, cy, conf = ball_det
+                    cx, cy, conf, bbox = ball_det
                     trajectory_points.append({
                         "time_s": float(current_time),
                         "x": cx,
                         "y": cy,
                         "confidence": conf,
-                        "bbox": {
-                            "x1": float(cx - 0.01),
-                            "y1": float(cy - 0.01),
-                            "x2": float(cx + 0.01),
-                            "y2": float(cy + 0.01),
-                        },
+                        "bbox": bbox,  # YOLO 检测的真实边界框
                     })
                     prev_ball_pos = (cx, cy)
                 else:
@@ -211,6 +308,7 @@ def analyze_ball_trajectory(
     metadata = {
         "detector": BALL_ALGORITHM,
         "detector_version": BALL_ARTIFACT_VERSION,
+        "model_path": str(BALL_MODEL_PATH),  # 记录使用的模型路径
         "image_size": int(image_size),
         "duration_s": float(video_duration_s),
         "range_start_s": float(range_start_s),
@@ -231,10 +329,13 @@ def analyze_ball_trajectory(
         "avg_confidence": avg_conf,
     }
 
+    # 使用插值填充缺失的轨迹点，使轨迹更平滑连续
+    interpolated_trajectory = _interpolate_trajectory(trajectory_points)
+
     artifact = {
         "metadata": metadata,
         "summary": summary,
-        "trajectory": trajectory_points,
+        "trajectory": interpolated_trajectory,
     }
 
     from app.config import settings
