@@ -2,6 +2,59 @@
 
 ## 2026-05-12 (UTC+8)
 
+### 新增：球拍检测 + 击球火花效果
+
+**功能描述：**
+1. 使用 YOLO 模型检测球拍位置
+2. 通过球和球拍的位置关系识别击球时刻
+3. 在击球时刻添加火花粒子效果
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/racket_tracking.py` | 新增球拍检测模块 |
+| `app/pipeline/ball_tracking.py` | 添加球拍检测和击球时刻识别 |
+| `app/pipeline/video_renderer.py` | 添加火花粒子效果渲染 |
+
+**核心代码变更：**
+
+```python
+# racket_tracking.py - 球拍检测
+def detect_racket(frame, model) -> dict:
+    # 返回球拍位置 {"x1", "y1", "x2", "y2", "conf"}
+
+def find_hit_moments(ball_detections, racket_detections, video_fps) -> list:
+    # 检测击球时刻：球拍和球距离突变
+    # 1. 距离突然变小（接近）
+    # 2. 随后球加速离开
+```
+
+```python
+# video_renderer.py - 火花粒子效果
+def _init_sparks(hit_moments, video_fps):
+    # 为每个击球时刻创建50个火花粒子
+    # 粒子具有随机速度、大小和颜色
+
+def _draw_sparks(frame, current_frame_idx):
+    # 绘制火花粒子（多层发光效果）
+    # 粒子受重力影响，透明度随生命周期衰减
+```
+
+**使用说明：**
+1. 将球拍检测模型放置到 `models/racket.pt`
+2. 运行球轨迹分析，自动检测击球时刻
+3. 生成的视频将在击球时刻显示火花效果
+
+**效果：**
+- 球拍检测（如果模型可用）
+- 击球时刻自动识别
+- 火花粒子效果（50个粒子/击球，0.2-0.5秒生命周期）
+
+---
+
+## 2026-05-12 (UTC+8)
+
 ### 新增：视频轨迹渲染样式 - 青绿色发光拖尾效果
 
 **功能描述：**

@@ -1,11 +1,12 @@
 """
 视频渲染模块 - 参考 Tennis_AI_mainland 项目实现
 
-直接在原始视频帧上绘制网球轨迹。
+直接在原始视频帧上绘制网球轨迹和击球火花效果。
 参考: https://github.com/qchen34/Tennis_AI_mainland
 """
 
 import logging
+import random
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +17,71 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str, float | None], None]
 
+# 火花粒子系统
+_spark_particles: list[dict] = []
+
+
+def _init_sparks(hit_moments: list[dict], video_fps: float):
+    """初始化火花粒子系统"""
+    global _spark_particles
+    _spark_particles = []
+
+    for hit in hit_moments:
+        frame_idx = hit.get("frame_idx", int(hit.get("time_s", 0) * video_fps))
+        pos = hit.get("ball_pos", (0, 0))
+
+        # 为每个击球时刻创建多个火花粒子
+        for _ in range(50):  # 50个粒子
+            angle = random.uniform(0, 2 * np.pi)
+            speed = random.uniform(2, 8)
+            lifetime = random.uniform(0.2, 0.5)  # 0.2-0.5秒
+
+            _spark_particles.append({
+                "frame_start": frame_idx,
+                "lifetime_frames": int(lifetime * video_fps),
+                "x": pos[0],
+                "y": pos[1],
+                "vx": np.cos(angle) * speed,
+                "vy": np.sin(angle) * speed - 2,  # 向上偏移
+                "size": random.uniform(1, 3),
+                "color": (
+                    random.randint(200, 255),  # B
+                    random.randint(100, 200),  # G
+                    random.randint(0, 50),      # R
+                ),
+            })
+
+
+def _draw_sparks(frame: np.ndarray, current_frame_idx: int) -> np.ndarray:
+    """在当前帧绘制火花粒子"""
+    h, w = frame.shape[:2]
+
+    for p in _spark_particles:
+        age = current_frame_idx - p["frame_start"]
+
+        if age < 0 or age > p["lifetime_frames"]:
+            continue
+
+        # 计算粒子位置
+        progress = age / p["lifetime_frames"]
+        x = int(p["x"] + p["vx"] * age)
+        y = int(p["y"] + p["vy"] * age + 0.5 * 9.8 * (age/30) ** 2)  # 重力
+
+        if x < 0 or x >= w or y < 0 or y >= h:
+            continue
+
+        # 透明度随生命周期衰减
+        alpha = 1.0 - progress
+        color = tuple(int(c * alpha) for c in p["color"])
+
+        # 绘制发光效果（多层）
+        for radius in [3, 2, 1]:
+            overlay = frame.copy()
+            cv2.circle(overlay, (x, y), int(p["size"] * radius), color, -1)
+            cv2.addWeighted(overlay, alpha * 0.5, frame, 1 - alpha * 0.5, 0, frame)
+
+    return frame
+
 
 def draw_ball_trajectory_video(
     video_path: Path,
@@ -24,6 +90,7 @@ def draw_ball_trajectory_video(
     range_start_s: float = 0.0,
     sample_fps: float = 4.0,
     progress_cb: ProgressCallback | None = None,
+    hit_moments: list[dict] | None = None,
 ) -> Path:
     """
     在原始视频上绘制网球轨迹并输出 MP4
@@ -37,6 +104,7 @@ def draw_ball_trajectory_video(
         range_start_s: 起始时间（秒）
         sample_fps: 采样帧率
         progress_cb: 进度回调
+        hit_moments: 击球时刻列表（用于火花效果）
 
     Returns:
         输出视频路径
@@ -69,6 +137,11 @@ def draw_ball_trajectory_video(
     # 用于绘制轨迹
     trajectory_points: list[tuple[int, int]] = []
 
+    # 初始化火花粒子系统
+    if hit_moments:
+        _init_sparks(hit_moments, video_fps)
+        logger.info(f"Initialized spark effects for {len(hit_moments)} hit moments")
+
     try:
         frame_idx = 0
 
@@ -76,6 +149,10 @@ def draw_ball_trajectory_video(
             ret, frame = cap.read()
             if not ret:
                 break
+
+            # 绘制火花效果（在球之前）
+            if hit_moments:
+                frame = _draw_sparks(frame, frame_idx)
 
             # 逐帧绘制检测结果
             if frame_idx < len(ball_detections):
@@ -165,6 +242,7 @@ def render_ball_video_from_artifact(
     """
     ball_detections = artifact.get("ball_detections", [])
     metadata = artifact.get("metadata", {})
+    hit_moments = artifact.get("hit_moments", [])
 
     return draw_ball_trajectory_video(
         video_path=video_path,
@@ -173,4 +251,5 @@ def render_ball_video_from_artifact(
         range_start_s=metadata.get("range_start_s", 0.0),
         sample_fps=metadata.get("sample_fps", 4.0),
         progress_cb=progress_cb,
+        hit_moments=hit_moments if hit_moments else None,
     )

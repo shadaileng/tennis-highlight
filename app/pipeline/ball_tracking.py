@@ -137,17 +137,37 @@ def analyze_ball_trajectory(
 
     # 逐帧检测 (只检测指定范围内的帧)
     ball_detections: list[dict[int, list[float]]] = []
+    racket_detections: list[dict | None] = []  # 新增：球拍检测
     frame_idx = 0
     started = time.monotonic()
+
+    # 尝试加载球拍检测模型
+    racket_model = None
+    try:
+        from app.pipeline.racket_tracking import _get_racket_model
+        racket_model = _get_racket_model()
+        if racket_model:
+            logger.info("Racket detection model loaded")
+    except Exception as e:
+        logger.warning(f"Racket model not available: {e}")
 
     while frame_idx < num_target_frames:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # 每帧都检测
+        # 每帧都检测球
         ball_dict = _detect_frame(frame, model)
         ball_detections.append(ball_dict)
+
+        # 检测球拍（如果模型可用）
+        if racket_model:
+            from app.pipeline.racket_tracking import detect_racket
+            racket = detect_racket(frame, racket_model)
+            racket_detections.append(racket)
+        else:
+            racket_detections.append(None)
+
         frame_idx += 1
 
         if frame_idx % 30 == 0:
@@ -163,6 +183,13 @@ def analyze_ball_trajectory(
 
     # 插值填补缺失的检测 (参考 Tennis_AI_mainland)
     interpolated_detections = _interpolate_ball_positions(ball_detections)
+
+    # 检测击球时刻
+    hit_moments = []
+    if racket_model and any(r is not None for r in racket_detections):
+        from app.pipeline.racket_tracking import find_hit_moments
+        hit_moments = find_hit_moments(interpolated_detections, racket_detections, video_fps)
+        logger.info(f"Found {len(hit_moments)} hit moments")
 
     # 计算检测统计
     valid_count = sum(1 for d in interpolated_detections if 1 in d)
@@ -196,6 +223,7 @@ def analyze_ball_trajectory(
         "metadata": metadata,
         "summary": summary,
         "ball_detections": interpolated_detections,  # 与 Tennis_AI_mainland 格式一致
+        "hit_moments": hit_moments,  # 击球时刻列表
     }
 
     # 保存 artifact
