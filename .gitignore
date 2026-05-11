@@ -33,3 +33,4 @@ data/
 *.m4v
 *.avi
 *.webm
+logs/
