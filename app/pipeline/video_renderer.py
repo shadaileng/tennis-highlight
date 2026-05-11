@@ -83,9 +83,6 @@ def draw_ball_trajectory_video(
                 if 1 in ball_dict:
                     x1, y1, x2, y2 = ball_dict[1]
 
-                    # 绘制边界框
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
-
                     # 计算中心点
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
@@ -93,35 +90,43 @@ def draw_ball_trajectory_video(
                     # 添加到轨迹
                     trajectory_points.append((cx, cy))
 
-                    # 绘制当前球位置 (大圆点)
-                    cv2.circle(frame, (cx, cy), 8, (0, 255, 255), -1)
-                    cv2.circle(frame, (cx, cy), 12, (0, 200, 255), 2)
-
-                    # 绘制轨迹线 (最近 30 帧)
+                    # 绘制发光拖尾效果 (参考图片: 青绿色发光拖尾)
                     if len(trajectory_points) > 1:
-                        start_idx = max(0, len(trajectory_points) - 30)
+                        # 使用最近15个点，创建渐隐拖尾
+                        trail_length = min(15, len(trajectory_points))
+                        start_idx = len(trajectory_points) - trail_length
                         pts = trajectory_points[start_idx:]
 
-                        for i in range(1, len(pts)):
-                            alpha = i / len(pts)
-                            color = (
-                                int(0 + 255 * alpha),
-                                int(255 * alpha),
-                                int(255 * (1 - alpha) + 100 * alpha),
-                            )
-                            thickness = max(1, int(2 * alpha))
-                            cv2.line(frame, pts[i - 1], pts[i], color, thickness)
+                        # 创建发光效果 - 多层绘制实现模糊发光
+                        for layer in range(3):
+                            alpha_base = 0.3 + layer * 0.25  # 0.3, 0.55, 0.8
 
-                    # 添加标签
-                    cv2.putText(
-                        frame,
-                        "Ball",
-                        (int(x1), max(20, int(y1) - 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 255, 255),
-                        2,
-                    )
+                            for i in range(1, len(pts)):
+                                progress = i / (len(pts) - 1)  # 0.0 -> 1.0
+                                # 青绿色渐变: 头部亮青色，尾部暗青色
+                                r = int(50 * progress)
+                                g = int(200 + 55 * progress)
+                                b = int(180 + 75 * progress)
+                                alpha = alpha_base * progress
+
+                                color = (b, g, r)  # OpenCV 使用 BGR
+                                thickness = max(2, int((3 - layer) * progress * 3))
+
+                                # 使用半透明叠加
+                                overlay = frame.copy()
+                                cv2.line(overlay, pts[i - 1], pts[i], color, thickness)
+                                cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+                    # 绘制当前球位置 (发光球体)
+                    # 外层光晕
+                    for radius, alpha in [(20, 0.2), (14, 0.4), (10, 0.6)]:
+                        overlay = frame.copy()
+                        cv2.circle(overlay, (cx, cy), radius, (180, 230, 100), -1)
+                        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+                    # 核心亮点
+                    cv2.circle(frame, (cx, cy), 6, (200, 255, 220), -1)
+                    cv2.circle(frame, (cx, cy), 4, (255, 255, 255), -1)
 
             # 写入帧
             out.write(frame)
