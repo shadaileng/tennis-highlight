@@ -124,6 +124,7 @@ def _analysis_summary(r) -> AnalysisRunSummary:
         range_start_s=r["range_start_s"] if "range_start_s" in r.keys() else None,
         range_end_s=r["range_end_s"] if "range_end_s" in r.keys() else None,
         noninstant_knobs=knobs,
+        video_path=r["video_path"],
         created_at=r["created_at"],
     )
 

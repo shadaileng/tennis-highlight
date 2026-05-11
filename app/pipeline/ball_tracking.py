@@ -1,25 +1,13 @@
 """
-网球检测模块 - 使用 YOLO 模型进行网球检测
+网球检测模块 - 参考 Tennis_AI_mainland 项目实现
 
-模型文件说明:
-    - yolo5_last.pt: YOLOv5 训练的网球检测模型 (来自 tennis_analysis 项目)
-      下载链接: https://drive.google.com/file/d/1UZwiG1jkWgce9lNhxJ2L0NVjX1vGM05U/view
-    - keypoints_model.pth: 网球场地关键点模型 (用于球场标定)
-
-模型加载方式:
-    使用 ultralytics 库加载 YOLO 模型:
-        from ultralytics import YOLO
-        model = YOLO("models/yolo5_last.pt")
-        results = model.predict(frame, conf=0.15)
-
-注意: 模型文件名不要修改，与 tennis_analysis 项目保持一致
+直接使用 YOLO 模型在原始视频帧上检测网球，返回边界框列表。
+参考: https://github.com/qchen34/Tennis_AI_mainland
 """
 
 import gzip
 import json
 import logging
-import subprocess
-import tempfile
 import time
 from pathlib import Path
 from typing import Callable
@@ -32,169 +20,75 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str, float | None], None]
 
-# 使用 YOLO 模型进行网球检测 (替换原来的 HSV 颜色检测)
 BALL_ALGORITHM = "ball_tracking_yolo"
-BALL_ARTIFACT_VERSION = 3
-BALL_TARGET_WIDTH = 640
+BALL_ARTIFACT_VERSION = 4
 
-# 模型文件路径 (不要修改文件名，与 tennis_analysis 项目保持一致)
-# yolo5_last.pt: YOLOv5 训练的网球检测模型
-# 来源: https://github.com/abdullahtarek/tennis_analysis
-# 路径: /workspace/tennis-highlight/models/yolo5_last.pt
 BALL_MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "yolo5_last.pt"
 
-# 追踪距离阈值 (归一化坐标) - 网球高速移动时阈值
-# 0.15 相当于在 640 宽度图像上约 96 像素，更严格的追踪减少误检
-TRACKING_DISTANCE_THRESHOLD = 0.15
-
-# 全局模型缓存 (懒加载)
 _ball_model = None
 
 
-def _interpolate_trajectory(trajectory_points: list[dict]) -> list[dict]:
-    """使用 pandas 插值填充缺失的球位置，使轨迹更平滑连续
-    
-    参考 tennis_analysis 项目: https://github.com/qchen34/Tennis_AI_mainland
-    当某帧未检测到网球时，使用线性插值计算位置，使轨迹不会断裂
-    """
-    if not trajectory_points:
-        return trajectory_points
-    
-    # 转换为 DataFrame 格式
-    rows = []
-    for p in trajectory_points:
-        if p["x"] is not None and p["y"] is not None:
-            rows.append({
-                "time_s": p["time_s"],
-                "x": p["x"],
-                "y": p["y"],
-                "confidence": p["confidence"],
-                "bbox": p.get("bbox"),
-            })
-        else:
-            rows.append({
-                "time_s": p["time_s"],
-                "x": np.nan,
-                "y": np.nan,
-                "confidence": 0.0,
-                "bbox": None,
-            })
-    
-    df = pd.DataFrame(rows)
-    
-    # 线性插值填充缺失值
-    df['x'] = df['x'].interpolate(method='linear')
-    df['y'] = df['y'].interpolate(method='linear')
-    
-    # 处理首尾的 NaN 值（使用向前/向后填充）
-    df['x'] = df['x'].bfill().ffill()
-    df['y'] = df['y'].bfill().ffill()
-    
-    # 插值后的点置信度设为 0.5
-    df['confidence'] = 0.5
-    
-    # 转回原格式
-    result = []
-    for i, row in df.iterrows():
-        result.append({
-            "time_s": float(row['time_s']),
-            "x": float(row['x']),
-            "y": float(row['y']),
-            "confidence": float(row['confidence']),
-            "bbox": row.get('bbox'),
-        })
-    
-    return result
-
-
 def _get_ball_model():
-    """获取 YOLO 网球检测模型 (懒加载，避免重复加载)
-    
-    依赖 ultralytics 库，安装方式: pip install ultralytics
-    """
+    """获取 YOLO 网球检测模型 (懒加载)"""
     global _ball_model
     if _ball_model is None:
-        try:
-            from ultralytics import YOLO
-        except Exception as e:
-            raise RuntimeError(
-                "ultralytics is required for YOLO ball detection. "
-                "Install it with `.venv/bin/pip install ultralytics`."
-            ) from e
-        
+        from ultralytics import YOLO
+
         if not BALL_MODEL_PATH.exists():
             raise RuntimeError(
                 f"Ball model not found: {BALL_MODEL_PATH}\n"
                 f"Please download from: https://drive.google.com/file/d/1UZwiG1jkWgce9lNhxJ2L0NVjX1vGM05U/view"
             )
-        
+
         logger.info(f"Loading ball detection model from {BALL_MODEL_PATH}")
         _ball_model = YOLO(str(BALL_MODEL_PATH))
-    
+
     return _ball_model
 
 
-def _detect_tennis_ball_yolo(
-    frame: np.ndarray,
-    model,
-    prev_pos: tuple[float, float] | None = None
-) -> tuple[float, float, float, dict | None] | None:
-    """使用 YOLO 模型检测网球
-    
-    参数:
-        frame: 输入帧 (BGR 格式)
-        model: YOLO 模型实例 (来自 ultralytics)
-        prev_pos: 上一帧中网球的位置 (归一化坐标), 用于追踪
-    
-    返回:
-        (center_x, center_y, confidence, bbox) 或 None (如果没有检测到网球)
-        - center_x, center_y: 归一化到 [0, 1] 的坐标
-        - confidence: 检测置信度 [0, 1]
-        - bbox: 边界框字典 {"x1", "y1", "x2", "y2"} (归一化坐标)
-    
-    模型推理说明:
-        使用 YOLOv5 模型进行网球检测，置信度阈值设为 0.08
-        results.boxes 包含检测结果，包含 xyxy (边界框) 和 conf (置信度)
+def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
     """
-    h, w = frame.shape[:2]
-    
-    # 使用 YOLO 模型进行推理 (置信度阈值 0.15，减少误检)
+    检测单帧中的网球
+
+    返回:
+        {1: [x1, y1, x2, y2]} 格式的边界框，track_id=1 固定
+        如果没有检测到，返回空字典 {}
+    """
     results = model.predict(frame, conf=0.15, verbose=False)[0]
-    
-    # 如果没有检测到目标，返回 None
-    if results.boxes is None or len(results.boxes) == 0:
-        return None
-    
-    # 获取检测框 (取置信度最高的一个)
-    boxes = results.boxes
-    # 按置信度排序，取最好的检测
-    best_idx = int(boxes.conf.argmax())
-    x1, y1, x2, y2 = boxes.xyxy[best_idx].cpu().numpy()
-    conf = float(boxes.conf[best_idx].cpu().numpy())
-    
-    # 计算中心点 (归一化到 [0, 1])
-    cx = float((x1 + x2) / 2 / w)
-    cy = float((y1 + y2) / 2 / h)
-    
-    # 边界框 (归一化坐标)
-    bbox = {
-        "x1": float(x1 / w),
-        "y1": float(y1 / h),
-        "x2": float(x2 / w),
-        "y2": float(y2 / h),
-    }
-    
-    # 如果提供了上一帧的位置，进行追踪过滤 (避免误检)
-    if prev_pos:
-        prev_x, prev_y = prev_pos
-        dist = np.sqrt((cx - prev_x)**2 + (cy - prev_y)**2)
-        if dist > TRACKING_DISTANCE_THRESHOLD:
-            # 距离太远，可能是误检
-            return None
-        # 根据距离调整置信度
-        conf = min(conf, 1.0 - dist)
-    
-    return (cx, cy, conf, bbox)
+
+    ball_dict = {}
+    if results.boxes is not None and len(results.boxes) > 0:
+        for box in results.boxes:
+            result = box.xyxy.tolist()[0]
+            ball_dict[1] = result
+
+    return ball_dict
+
+
+def _interpolate_ball_positions(ball_detections: list[dict[int, list[float]]]) -> list[dict[int, list[float]]]:
+    """
+    插值填补缺失的网球位置
+    参考 Tennis_AI_mainland/tennis_analysis/trackers/ball_tracker.py
+    """
+    if not ball_detections:
+        return ball_detections
+
+    # 提取 [x1, y1, x2, y2] 列表
+    positions = [x.get(1, []) for x in ball_detections]
+
+    # 转换为 DataFrame
+    df = pd.DataFrame(positions, columns=["x1", "y1", "x2", "y2"])
+
+    # 检查是否有有效数据
+    if df.empty or df[["x1", "y1", "x2", "y2"]].isna().all().all():
+        return ball_detections
+
+    # 线性插值
+    df = df.interpolate()
+    df = df.bfill()
+
+    # 转回原格式
+    return [{1: x} for x in df.to_numpy().tolist()]
 
 
 def analyze_ball_trajectory(
@@ -205,172 +99,141 @@ def analyze_ball_trajectory(
     range_start_s: float,
     range_end_s: float,
     progress_cb: ProgressCallback | None = None,
-    image_size: int = BALL_TARGET_WIDTH,
-) -> tuple[Path, dict]:
-    """使用 YOLO 模型检测网球并生成轨迹数据
-    
-    模型说明:
-        - 使用 yolo5_last.pt (YOLOv5 训练的网球检测模型)
-        - 来自 tennis_analysis 项目: https://github.com/abdullahtarek/tennis_analysis
-        - 依赖 ultralytics 库
+) -> tuple[Path, dict, Path | None]:
     """
-    from app.pipeline.motion_analysis import _probe_video
-    
-    # 加载 YOLO 网球检测模型
-    if progress_cb:
-        progress_cb(1.0, f"Loading ball model: {BALL_MODEL_PATH.name}", None)
+    使用 YOLO 模型检测网球并生成轨迹数据
+
+    返回:
+        (artifact_path, artifact, video_output_path)
+    """
+    from app.config import settings
+    from app.pipeline.video_renderer import draw_ball_trajectory_video
+
     model = _get_ball_model()
-    
-    info = _probe_video(video_path)
-    target_w = int(image_size)
-    target_h = max(2, ((info["height"] * target_w) // info["width"]) & ~1)
-    duration = max(0.0, range_end_s - range_start_s)
-    total_samples = max(1, int(round(duration * sample_fps)))
 
     if progress_cb:
-        progress_cb(5.0, f"Detecting balls in {total_samples:,} samples", None)
+        progress_cb(1.0, "Loading ball model...", None)
 
-    trajectory_points: list[dict] = []
-    prev_ball_pos: tuple[float, float] | None = None
+    # 打开视频
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+
+    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # 跳到起始位置
+    start_frame = int(range_start_s * video_fps)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    duration = range_end_s - range_start_s
+    # 实际要检测的帧数
+    num_target_frames = int(duration * video_fps)
+
+    if progress_cb:
+        progress_cb(5.0, f"Detecting balls in {num_target_frames} frames", None)
+
+    # 逐帧检测 (只检测指定范围内的帧)
+    ball_detections: list[dict[int, list[float]]] = []
     frame_idx = 0
     started = time.monotonic()
 
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-ss", f"{range_start_s:.3f}",
-        "-i", str(video_path),
-        "-t", f"{duration:.3f}",
-        "-an",
-        "-vf", f"fps={sample_fps},scale={target_w}:{target_h}",
-        "-f", "rawvideo", "-pix_fmt", "bgr24",
-        "-",
-    ]
-    frame_bytes = target_w * target_h * 3
+    while frame_idx < num_target_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    with tempfile.TemporaryFile(mode="w+b") as stderr_tmp:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=stderr_tmp, bufsize=frame_bytes * 4
-        )
-        assert proc.stdout is not None
-        try:
-            while True:
-                buf = _read_exact(proc.stdout, frame_bytes)
-                if buf is None:
-                    break
+        # 每帧都检测
+        ball_dict = _detect_frame(frame, model)
+        ball_detections.append(ball_dict)
+        frame_idx += 1
 
-                frame = np.frombuffer(buf, dtype=np.uint8).reshape(target_h, target_w, 3)
-                current_time = range_start_s + (frame_idx / sample_fps)
+        if frame_idx % 30 == 0:
+            elapsed = time.monotonic() - started
+            rate = frame_idx / elapsed if elapsed > 0 else 0
+            remaining = max(0, num_target_frames - frame_idx)
+            eta = remaining / rate if rate > 0 else None
+            pct = 5.0 + (frame_idx / num_target_frames) * 80.0 if num_target_frames > 0 else 85.0
+            if progress_cb:
+                progress_cb(min(85.0, pct), f"Detected {frame_idx}/{num_target_frames}", eta)
 
-                # 使用 YOLO 模型检测网球 (替换原来的 HSV 颜色检测)
-                ball_det = _detect_tennis_ball_yolo(frame, model, prev_ball_pos)
+    cap.release()
 
-                if ball_det:
-                    cx, cy, conf, bbox = ball_det
-                    trajectory_points.append({
-                        "time_s": float(current_time),
-                        "x": cx,
-                        "y": cy,
-                        "confidence": conf,
-                        "bbox": bbox,  # YOLO 检测的真实边界框
-                    })
-                    prev_ball_pos = (cx, cy)
-                else:
-                    trajectory_points.append({
-                        "time_s": float(current_time),
-                        "x": None,
-                        "y": None,
-                        "confidence": 0.0,
-                        "bbox": None,
-                    })
+    # 插值填补缺失的检测 (参考 Tennis_AI_mainland)
+    interpolated_detections = _interpolate_ball_positions(ball_detections)
 
-                frame_idx += 1
-
-                if progress_cb and (frame_idx % 10 == 0):
-                    elapsed = time.monotonic() - started
-                    rate = frame_idx / elapsed if elapsed > 0 else 0
-                    remaining = max(0, total_samples - frame_idx)
-                    eta = remaining / rate if rate > 0 else None
-                    pct = 5.0 + (frame_idx / total_samples) * 90.0
-                    progress_cb(
-                        min(95.0, pct),
-                        f"Detected balls {frame_idx:,}/{total_samples:,} — ETA {_fmt_eta(eta)}",
-                        eta,
-                    )
-
-            proc.wait(timeout=30)
-
-        finally:
-            try:
-                proc.stdout.close()
-            except Exception:
-                pass
+    # 计算检测统计
+    valid_count = sum(1 for d in interpolated_detections if 1 in d)
+    detection_rate = (valid_count / len(interpolated_detections) * 100) if interpolated_detections else 0
 
     metadata = {
         "detector": BALL_ALGORITHM,
         "detector_version": BALL_ARTIFACT_VERSION,
-        "model_path": str(BALL_MODEL_PATH),  # 记录使用的模型路径
-        "image_size": int(image_size),
+        "model_path": str(BALL_MODEL_PATH),
+        "video_width": width,
+        "video_height": height,
+        "target_width": width,  # 目标尺寸 = 视频原始尺寸
+        "target_height": height,
+        "video_fps": video_fps,
         "duration_s": float(video_duration_s),
         "range_start_s": float(range_start_s),
         "range_end_s": float(range_end_s),
-        "target_width": int(target_w),
-        "target_height": int(target_h),
-        "sample_fps": float(sample_fps),
-        "sample_count": len(trajectory_points),
+        "sample_fps": video_fps,  # 逐帧检测，sample_fps 等于视频帧率
+        "median_bg_samples": 0,   # ball tracking 不需要此参数
+        "sample_count": len(interpolated_detections),
     }
 
-    detected_count = sum(1 for p in trajectory_points if p["x"] is not None)
-    detected_points = [p for p in trajectory_points if p["x"] is not None]
-    avg_conf = float(np.mean([p["confidence"] for p in detected_points])) if detected_points else 0
     summary = {
-        "total_samples": len(trajectory_points),
-        "detected_frames": detected_count,
-        "detection_rate": (detected_count / len(trajectory_points) * 100) if trajectory_points else 0,
-        "avg_confidence": avg_conf,
+        "total_samples": len(interpolated_detections),
+        "detected_frames": valid_count,
+        "detection_rate": detection_rate,
+        "avg_confidence": 0.5,  # 插值后的点使用默认置信度
     }
-
-    # 使用插值填充缺失的轨迹点，使轨迹更平滑连续
-    interpolated_trajectory = _interpolate_trajectory(trajectory_points)
 
     artifact = {
         "metadata": metadata,
         "summary": summary,
-        "trajectory": interpolated_trajectory,
+        "ball_detections": interpolated_detections,  # 与 Tennis_AI_mainland 格式一致
     }
 
-    from app.config import settings
+    # 保存 artifact
     settings.analysis_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = settings.analysis_dir / f"{analysis_id}.ball.json.gz"
     with gzip.open(artifact_path, "wt", encoding="utf-8") as f:
         json.dump(artifact, f)
 
-    if progress_cb:
-        progress_cb(100.0, f"Done: {detected_count} ball detections", None)
+    # 生成带轨迹的视频
+    video_output_path = None
+    try:
+        if progress_cb:
+            progress_cb(90.0, "Generating video with ball trajectory...", None)
 
-    return artifact_path, artifact
+        settings.ball_videos_dir.mkdir(parents=True, exist_ok=True)
+        video_output_path = settings.ball_videos_dir / f"{analysis_id}_ball_trajectory.mp4"
+
+        draw_ball_trajectory_video(
+            video_path=video_path,
+            ball_detections=interpolated_detections,
+            output_path=video_output_path,
+            range_start_s=range_start_s,
+            sample_fps=sample_fps,
+            progress_cb=progress_cb,
+        )
+        logger.info(f"Ball trajectory video saved to: {video_output_path}")
+
+    except Exception as e:
+        logger.warning(f"Failed to generate ball trajectory video: {e}")
+        video_output_path = None
+
+    if progress_cb:
+        progress_cb(100.0, f"Done: {valid_count} ball detections", None)
+
+    return artifact_path, artifact, video_output_path
 
 
 def load_ball_artifact(artifact_path: Path) -> dict:
+    """加载 ball artifact"""
     with gzip.open(artifact_path, "rt", encoding="utf-8") as f:
         return json.load(f)
-
-
-def _read_exact(stream, n: int) -> bytes | None:
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = stream.read(n - len(buf))
-        if not chunk:
-            return None if not buf else bytes(buf)
-        buf.extend(chunk)
-    return bytes(buf)
-
-
-def _fmt_eta(seconds: float | None) -> str:
-    if seconds is None:
-        return "unknown"
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    mins = seconds / 60
-    if mins < 60:
-        return f"{mins:.1f}m"
-    return f"{mins / 60:.1f}h"

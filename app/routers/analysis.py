@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.database import (
     get_analysis_run,
@@ -17,6 +18,7 @@ from app.models import (
     DetectorKnobs,
     Segment,
 )
+from app.pipeline.ball_tracking import BALL_ALGORITHM, load_ball_artifact
 from app.pipeline.motion_analysis import default_knobs, load_artifact, normalize_knobs, recompute_from_artifact
 from app.pipeline.pose_analysis import POSE_ALGORITHM, load_pose_artifact
 from app.routers.segments import segment_from_row
@@ -29,16 +31,17 @@ def _knobs_model(knobs: dict) -> DetectorKnobs:
 
 
 def _metadata_model(metadata: dict, analysis_id: str | None = None) -> AnalysisMetadata:
+    # 提供默认值以兼容 ball_tracking 等不同类型的分析
     return AnalysisMetadata(
         analysis_id=analysis_id,
-        detector=metadata["detector"],
-        detector_version=int(metadata["detector_version"]),
-        duration_s=float(metadata["duration_s"]),
-        target_width=int(metadata["target_width"]),
-        target_height=int(metadata["target_height"]),
-        sample_fps=float(metadata["sample_fps"]),
-        median_bg_samples=int(metadata["median_bg_samples"]),
-        sample_count=int(metadata["sample_count"]),
+        detector=metadata.get("detector", "unknown"),
+        detector_version=int(metadata.get("detector_version", 1)),
+        duration_s=float(metadata.get("duration_s", 0)),
+        target_width=int(metadata.get("target_width", metadata.get("video_width", 1920))),
+        target_height=int(metadata.get("target_height", metadata.get("video_height", 1080))),
+        sample_fps=float(metadata.get("sample_fps", metadata.get("video_fps", 30))),
+        median_bg_samples=int(metadata.get("median_bg_samples", 0)),
+        sample_count=int(metadata.get("sample_count", 0)),
     )
 
 
@@ -103,6 +106,15 @@ async def get_analysis(analysis_id: str) -> AnalysisResponse:
             knobs = _current_knobs(analysis, defaults)
             summary = artifact.get("summary", {})
             summary["config"] = artifact.get("metadata", {})
+        elif analysis["algorithm"] == BALL_ALGORITHM:
+            # 网球检测使用 JSON 格式的 artifact
+            artifact = load_ball_artifact(artifact_path)
+            metadata = artifact.get("metadata", {})
+            summary = artifact.get("summary", {})
+            knobs = {}
+            # Ball metadata doesn't have median_bg_samples, set default
+            if "median_bg_samples" not in metadata:
+                metadata["median_bg_samples"] = 0
         else:
             artifact = load_artifact(artifact_path)
             metadata = artifact["metadata"]
@@ -136,8 +148,8 @@ async def preview_analysis(analysis_id: str, payload: AnalysisPreviewRequest) ->
     if analysis is None:
         raise HTTPException(404, "analysis not found")
     artifact_path = _artifact_path(analysis)
-    if analysis["algorithm"] == POSE_ALGORITHM:
-        raise HTTPException(400, "pose analyses do not support instant segment preview yet")
+    if analysis["algorithm"] == POSE_ALGORITHM or analysis["algorithm"] == BALL_ALGORITHM:
+        raise HTTPException(400, f"{analysis['algorithm']} does not support instant segment preview yet")
     metadata = load_artifact(artifact_path)["metadata"]
 
     requested = payload.knobs.model_dump()
@@ -164,4 +176,41 @@ async def preview_analysis(analysis_id: str, payload: AnalysisPreviewRequest) ->
         knobs=_knobs_model(result["knobs"]),
         segments=[segment_from_row(r) for r in rows],
         summary=result["summary"],
+    )
+
+
+@router.get("/analysis/{analysis_id}/ball-video")
+async def download_ball_video(analysis_id: str):
+    """下载带网球轨迹的 MP4 视频
+
+    Args:
+        analysis_id: 分析 ID
+
+    Returns:
+        MP4 视频文件
+
+    Raises:
+        HTTPException: 404 if analysis not found or video not generated
+    """
+    analysis = await get_analysis_run(analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "Analysis not found")
+
+    # 检查是否为网球检测算法
+    if analysis["algorithm"] != BALL_ALGORITHM:
+        raise HTTPException(400, "This endpoint is only available for ball trajectory analysis")
+
+    # 检查视频路径
+    video_path = analysis["video_path"] if analysis["video_path"] else None
+    if not video_path:
+        raise HTTPException(404, "Ball trajectory video not generated yet")
+
+    video_file = Path(video_path)
+    if not video_file.exists():
+        raise HTTPException(410, "Ball trajectory video file missing")
+
+    return FileResponse(
+        video_file,
+        media_type="video/mp4",
+        filename=f"ball_trajectory_{analysis_id}.mp4",
     )

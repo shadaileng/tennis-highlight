@@ -58,6 +58,7 @@ class AnalysisRunSummary(BaseModel):
     range_start_s: float | None = None
     range_end_s: float | None = None
     noninstant_knobs: dict | None = None
+    video_path: str | None = None  # Path to ball trajectory video (MP4)
     created_at: float
 
 

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     exports_dir: Path = Path("data/exports")
     segments_tmp_dir: Path = Path("data/segments_tmp")
     analysis_dir: Path = Path("data/analysis")
+    ball_videos_dir: Path = Path("data/ball_videos")  # 带网球轨迹的视频输出目录
     db_path: Path = Path("data/app.db")
 
     motion_threshold: float = 0.02

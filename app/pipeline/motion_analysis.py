@@ -510,16 +510,24 @@ def ratios_from_histograms(histograms: np.ndarray, diff_threshold: int) -> np.nd
 
 
 def load_artifact(artifact_path: Path) -> dict:
-    with np.load(artifact_path, allow_pickle=False) as data:
-        metadata = json.loads(str(data["metadata_json"].item()))
-        return {
-            "metadata": metadata,
-            "times": data["times"].astype(np.float64),
-            "histograms": data["histograms"].astype(np.uint32),
-            "weighted_histograms": data["weighted_histograms"].astype(np.float64) if "weighted_histograms" in data.files else np.zeros((0, 256), dtype=np.float64),
-            "default_ratios": data["default_ratios"].astype(np.float64),
-            "default_smoothed": data["default_smoothed"].astype(np.float64),
-        }
+    try:
+        with np.load(artifact_path, allow_pickle=False) as data:
+            metadata = json.loads(str(data["metadata_json"].item()))
+            return {
+                "metadata": metadata,
+                "times": data["times"].astype(np.float64),
+                "histograms": data["histograms"].astype(np.uint32),
+                "weighted_histograms": data["weighted_histograms"].astype(np.float64) if "weighted_histograms" in data.files else np.zeros((0, 256), dtype=np.float64),
+                "default_ratios": data["default_ratios"].astype(np.float64),
+                "default_smoothed": data["default_smoothed"].astype(np.float64),
+            }
+    except ValueError as e:
+        if "pickled data" in str(e):
+            raise ValueError(
+                f"Artifact file is incompatible (old format): {artifact_path}. "
+                "Please re-run the analysis."
+            ) from e
+        raise
 
 
 def recompute_from_artifact(

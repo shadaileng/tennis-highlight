@@ -2,6 +2,63 @@
 
 ## 2026-05-12 (UTC+8)
 
+### 优化：网球轨迹跟随平滑度优化 - 时间补偿 + 线性插值
+
+**问题描述：**
+网球轨迹跟随存在轻微延迟，运动跳跃不够平滑。
+
+**根本原因：**
+1. `video.currentTime` 存在系统级延迟，需要时间补偿对齐
+2. 帧间运动跳跃明显，需要插值平滑
+
+**解决方案：**
+1. 增加时间补偿从 1 帧 → 2 帧（约 0.067 秒 @ 30fps）
+2. 添加线性插值，在最新检测点和当前时间之间平滑过渡
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `static/app.js` | `drawBallTrail()` 函数添加时间补偿和线性插值 |
+
+**核心代码变更：**
+
+```javascript
+// app.js - 时间补偿（第1523-1525行）
+const timeOffset = 2 / 30; // 约0.067秒 = 2帧 @ 30fps
+const currentTime = Math.min((video.currentTime || 0) + timeOffset, state.duration);
+
+// 线性插值：添加当前时间的预测点使运动更平滑（第1573-1592行）
+if (trailPoints.length >= 2) {
+  const latest = trailPoints[trailPoints.length - 1];
+  const prev = trailPoints[trailPoints.length - 2];
+  const gap = latest.time_s - prev.time_s;
+
+  if (gap > 0) {
+    const t = (currentTime - latest.time_s) / gap;
+    if (t > 0 && t <= 1) {
+      // 在最新点和预测点之间插值
+      const interpX = latest.x + (latest.x - prev.x) * t * 0.5;
+      const interpY = latest.y + (latest.y - prev.y) * t * 0.5;
+      trailPoints.push({
+        time_s: currentTime,
+        x: interpX,
+        y: interpY
+      });
+    }
+  }
+}
+```
+
+**效果：**
+- 轨迹跟随延迟减少
+- 运动更加平滑连续
+- 消除帧间跳跃感
+
+---
+
+## 2026-05-12 (UTC+8)
+
 ### 修复：球轨迹 API 返回空数据问题 - JSON key 类型兼容
 
 **问题描述：**

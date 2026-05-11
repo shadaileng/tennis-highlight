@@ -170,6 +170,7 @@ async def init_db() -> None:
                 "range_start_s": "ALTER TABLE analyses ADD COLUMN range_start_s REAL DEFAULT 0",
                 "range_end_s": "ALTER TABLE analyses ADD COLUMN range_end_s REAL",
                 "updated_at": "ALTER TABLE analyses ADD COLUMN updated_at REAL",
+                "video_path": "ALTER TABLE analyses ADD COLUMN video_path TEXT",
             }
             for col, sql in analysis_migrations.items():
                 if col not in analysis_cols:
@@ -583,6 +584,7 @@ async def complete_analysis(
     *,
     artifact_path: str,
     instant_knobs_json: str,
+    video_path: str | None = None,
 ) -> None:
     def _q():
         with _connect() as conn:
@@ -590,10 +592,11 @@ async def complete_analysis(
                 """
                 UPDATE analyses
                 SET status='done', artifact_path=?, instant_knobs_json=?,
-                    progress_percent=100, progress_message='done', progress_eta_s=NULL, updated_at=?
+                    progress_percent=100, progress_message='done', progress_eta_s=NULL,
+                    video_path=?, updated_at=?
                 WHERE id=?
                 """,
-                (artifact_path, instant_knobs_json, _now(), analysis_id),
+                (artifact_path, instant_knobs_json, video_path, _now(), analysis_id),
             )
             conn.commit()
     await asyncio.to_thread(_q)

@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+from app.config import settings
 from app.database import (
     complete_analysis,
     get_analysis_run,
@@ -14,7 +16,7 @@ from app.database import (
     update_analysis_status,
     update_export,
 )
-from app.config import settings
+from app.pipeline.ball_tracking import BALL_ALGORITHM, analyze_ball_trajectory
 from app.pipeline.ffmpeg_utils import probe_duration
 from app.pipeline.motion_analysis import (
     analyze_video_to_artifact,
@@ -22,14 +24,31 @@ from app.pipeline.motion_analysis import (
     normalize_knobs,
 )
 from app.pipeline.pose_analysis import POSE_ALGORITHM, analyze_pose_to_artifact
-from app.pipeline.ball_tracking import BALL_ALGORITHM, analyze_ball_trajectory
 from app.pipeline.video_editor import export_segments
 
 logger = logging.getLogger(__name__)
 
+# 独立的进程池，避免阻塞主事件循环
+_process_pool: ProcessPoolExecutor | None = None
+
+
+def _get_process_pool() -> ProcessPoolExecutor:
+    global _process_pool
+    if _process_pool is None:
+        import multiprocessing
+        # 使用 CPU 核心数，但最多 4 个进程
+        max_workers = min(multiprocessing.cpu_count(), 4)
+        _process_pool = ProcessPoolExecutor(max_workers=max_workers)
+        logger.info(f"Created process pool with {max_workers} workers")
+    return _process_pool
+
 
 async def run_analysis(analysis_id: str) -> None:
-    """Background task: analyze a video for in-play segments and store them."""
+    """Background task: analyze a video for in-play segments and store them.
+    
+    Uses a separate process pool to avoid blocking the main event loop
+    during CPU-intensive operations like YOLO inference.
+    """
     started = time.monotonic()
     try:
         await update_analysis_status(analysis_id, "analyzing")
@@ -57,47 +76,62 @@ async def run_analysis(analysis_id: str) -> None:
         except Exception:
             config = {}
         if analysis["algorithm"] == POSE_ALGORITHM:
-            artifact_path, timeline, analysis_result = await asyncio.to_thread(
-                analyze_pose_to_artifact,
-                analysis_id,
-                video_path,
-                duration,
-                float(knobs["sample_fps"]),
-                float(analysis["range_start_s"] or 0.0),
-                float(analysis["range_end_s"] or duration),
-                progress_cb,
-                str(config.get("pose_model", "yolo11n-pose.pt")),
-                float(config.get("pose_conf", 0.25)),
-                int(config.get("pose_imgsz", 640)),
+            loop = asyncio.get_running_loop()
+            artifact_path, timeline, analysis_result = await loop.run_in_executor(
+                _get_process_pool(),
+                lambda: analyze_pose_to_artifact(
+                    analysis_id,
+                    video_path,
+                    duration,
+                    float(knobs["sample_fps"]),
+                    float(analysis["range_start_s"] or 0.0),
+                    float(analysis["range_end_s"] or duration),
+                    progress_cb,
+                    str(config.get("pose_model", "yolo11n-pose.pt")),
+                    float(config.get("pose_conf", 0.25)),
+                    int(config.get("pose_imgsz", 640)),
+                ),
             )
         elif analysis["algorithm"] == BALL_ALGORITHM:
-            # Ball trajectory analysis - creates ball artifact but no segments
-            await asyncio.to_thread(
-                analyze_ball_trajectory,
-                analysis_id,
-                video_path,
-                duration,
-                float(knobs.get("sample_fps", 4.0)),
-                float(analysis["range_start_s"] or 0.0),
-                float(analysis["range_end_s"] or duration),
-                progress_cb,
+            # Ball trajectory analysis - uses PROCESS POOL to avoid blocking
+            # This is the main fix for preventing service lock-up during YOLO inference
+            loop = asyncio.get_running_loop()
+            artifact_path, artifact, video_output_path = await loop.run_in_executor(
+                _get_process_pool(),
+                lambda: analyze_ball_trajectory(
+                    analysis_id,
+                    video_path,
+                    duration,
+                    float(knobs.get("sample_fps", 4.0)),
+                    float(analysis["range_start_s"] or 0.0),
+                    float(analysis["range_end_s"] or duration),
+                    progress_cb,
+                ),
             )
-            # Ball analysis doesn't produce segments, create minimal result
-            artifact_path = settings.analysis_dir / f"{analysis_id}.ball.json.gz"
-            timeline = []
-            analysis_result = {"summary": {"ball_analysis": True}}
-            
-            # Mark as complete with no segments
+            # Ball analysis doesn't produce segments, create a default full-video segment
+            range_start = float(analysis["range_start_s"] or 0.0)
+            range_end = float(analysis["range_end_s"] or duration)
+            timeline = [{
+                "start_s": range_start,
+                "end_s": range_end,
+                "is_on": True,
+                "source": "ball_trajectory",
+                "avg_score": 1.0,
+            }]
+            await replace_segments(video_id, timeline, analysis_id=analysis_id)
+
+            # Mark as complete (including video_path for MP4 download)
             await complete_analysis(
                 analysis_id,
                 artifact_path=str(artifact_path),
                 instant_knobs_json=json.dumps({"sample_fps": knobs.get("sample_fps", 4.0)}),
+                video_path=str(video_output_path) if video_output_path else None,
             )
             # Log and return early since we already called complete_analysis
             elapsed = time.monotonic() - started
             logger.info(
-                "ball trajectory analysis complete: analysis_id=%s elapsed=%.1fs",
-                analysis_id, elapsed,
+                "ball trajectory analysis complete: analysis_id=%s video_path=%s elapsed=%.1fs",
+                analysis_id, video_output_path, elapsed,
             )
             return
         else:
@@ -107,15 +141,18 @@ async def run_analysis(analysis_id: str) -> None:
                 if video is None or not video["court_calibration_json"]:
                     raise RuntimeError("court calibration is required for median_court_roi")
                 court_calibration = json.loads(video["court_calibration_json"])
-            artifact_path, timeline, analysis_result = await asyncio.to_thread(
-                analyze_video_to_artifact,
-                analysis_id,
-                video_path,
-                duration,
-                lambda pct, msg: progress_cb(pct, msg, None),
-                knobs,
-                analysis["algorithm"],
-                court_calibration,
+            loop = asyncio.get_running_loop()
+            artifact_path, timeline, analysis_result = await loop.run_in_executor(
+                _get_process_pool(),
+                lambda: analyze_video_to_artifact(
+                    analysis_id,
+                    video_path,
+                    duration,
+                    lambda pct, msg: progress_cb(pct, msg, None),
+                    knobs,
+                    analysis["algorithm"],
+                    court_calibration,
+                ),
             )
         summary = analysis_result.get("summary", analysis_result)
 
