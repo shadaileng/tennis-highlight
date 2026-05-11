@@ -2,6 +2,58 @@
 
 ## 2026-05-12 (UTC+8)
 
+### 新增：视频轨迹渲染样式 - 青绿色发光拖尾效果
+
+**功能描述：**
+后台生成的网球轨迹视频使用青绿色发光拖尾效果，参考专业网球转播视觉效果。
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/video_renderer.py` | 重写 `draw_ball_trajectory_video()` 绘制逻辑 |
+
+**核心代码变更：**
+
+```python
+# 绘制发光拖尾效果 (青绿色发光拖尾)
+if len(trajectory_points) > 1:
+    trail_length = min(15, len(trajectory_points))
+    start_idx = len(trajectory_points) - trail_length
+    pts = trajectory_points[start_idx:]
+
+    # 三层发光效果（不同透明度）
+    for layer in range(3):
+        alpha_base = 0.3 + layer * 0.25  # 0.3, 0.55, 0.8
+        
+        for i in range(1, len(pts)):
+            progress = i / (len(pts) - 1)  # 0.0 -> 1.0
+            # 青绿色渐变
+            r = int(50 * progress)
+            g = int(200 + 55 * progress)
+            b = int(180 + 75 * progress)
+            
+            overlay = frame.copy()
+            cv2.line(overlay, pts[i - 1], pts[i], (b, g, r), thickness)
+            cv2.addWeighted(overlay, alpha_base * progress, frame, ...)
+
+# 绘制发光球体（三层光晕 + 白色核心）
+for radius, alpha in [(20, 0.2), (14, 0.4), (10, 0.6)]:
+    overlay = frame.copy()
+    cv2.circle(overlay, (cx, cy), radius, (180, 230, 100), -1)
+    cv2.addWeighted(overlay, alpha, frame, ...)
+```
+
+**效果：**
+- 移除黄色边界框
+- 青绿色渐变拖尾（最近 15 帧）
+- 三层发光球体效果
+- 白色核心高光
+
+---
+
+## 2026-05-12 (UTC+8)
+
 ### 优化：网球轨迹跟随平滑度优化 - 时间补偿 + 线性插值
 
 **问题描述：**
