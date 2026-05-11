@@ -2,6 +2,84 @@
 
 ## 2026-05-12 (UTC+8)
 
+### 优化：整合 Tennis_AI_mainland 击球检测算法
+
+**功能描述：**
+从 `Tennis_AI_mainland` 项目移植基于轨迹分析的击球检测算法，作为球拍检测的补充方案。
+
+**算法原理（Tennis_AI_mainland）：**
+1. 计算球中心的 Y 坐标
+2. 使用滚动平均（window=5）平滑轨迹
+3. 计算 `delta_y`（Y 方向的速度变化）
+4. 检测方向反转：当 `delta_y` 从正变负或从负变正时，可能是击球点
+5. 如果在连续 ~25 帧内方向变化一致，则判定为击球
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | 添加 `get_ball_shot_frames()` 函数（从 Tennis_AI_mainland 移植） |
+| `app/pipeline/ball_tracking.py` | 添加 `_convert_to_hit_moments()` 辅助函数 |
+| `app/pipeline/ball_tracking.py` | 修改 `analyze_ball_trajectory()` 整合两种击球检测方法 |
+
+**核心代码变更：**
+
+```python
+# ball_tracking.py - 新增函数（从 Tennis_AI_mainland 移植）
+def get_ball_shot_frames(ball_detections: list[dict]) -> list[int]:
+    """
+    基于球的轨迹方向变化检测击球时刻
+    返回: 击球时刻的帧索引列表
+    """
+    df['mid_y'] = (df['y1'] + df['y2']) / 2
+    df['mid_y_rolling_mean'] = df['mid_y'].rolling(window=5, min_periods=1).mean()
+    df['delta_y'] = df['mid_y_rolling_mean'].diff()
+    
+    # 检测方向反转
+    for i in range(1, len(df) - int(minimum_change_frames_for_hit * 1.2)):
+        negative_position_change = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[i + 1] < 0
+        positive_position_change = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[i + 1] > 0
+        # ... 验证持续帧数 ...
+```
+
+```python
+# ball_tracking.py - 修改 analyze_ball_trajectory()
+# 整合两种击球检测方法
+hit_moments = []
+
+# 方法1: 基于球拍检测 (如果可用)
+if racket_model and any(r is not None for r in racket_detections):
+    racket_hit_moments = find_hit_by_racket(...)
+    hit_moments.extend(racket_hit_moments)
+
+# 方法2: 基于轨迹分析 (从 Tennis_AI_mainland 移植)
+trajectory_hit_frames = get_ball_shot_frames(interpolated_detections)
+if trajectory_hit_frames:
+    trajectory_hit_moments = _convert_to_hit_moments(...)
+    hit_moments.extend(trajectory_hit_moments)
+
+# 去重 (基于帧索引)
+seen_frames = set()
+unique_hit_moments = []
+for moment in hit_moments:
+    if moment['frame_idx'] not in seen_frames:
+        seen_frames.add(moment['frame_idx'])
+        unique_hit_moments.append(moment)
+```
+
+**优势：**
+- 即使球拍检测模型不可用，也能通过轨迹分析检测击球
+- 两种方法互为补充，提高检测准确率
+- 自动去重，避免重复检测
+
+**测试：**
+- 创建 `test_integrated_hit_detection.py` 测试脚本
+- 测试通过，无语法错误
+
+---
+
+## 2026-05-12 (UTC+8)
+
 ### 新增：球拍检测 + 击球火花效果
 
 **功能描述：**

@@ -91,6 +91,101 @@ def _interpolate_ball_positions(ball_detections: list[dict[int, list[float]]]) -
     return [{1: x} for x in df.to_numpy().tolist()]
 
 
+def get_ball_shot_frames(ball_detections: list[dict[int, list[float]]]) -> list[int]:
+    """
+    基于球的轨迹方向变化检测击球时刻
+    参考 Tennis_AI_mainland/tennis_analysis/trackers/ball_tracker.py
+    
+    算法原理:
+    1. 计算球中心的 Y 坐标
+    2. 使用滚动平均平滑轨迹
+    3. 计算 delta_y (Y 方向的速度变化)
+    4. 检测方向反转: 当 delta_y 从正变负或从负变正时，可能是击球点
+    5. 如果在连续 ~25 帧内方向变化一致，则判定为击球
+    
+    返回:
+        击球时刻的帧索引列表
+    """
+    if not ball_detections:
+        return []
+    
+    # 提取位置
+    positions = [x.get(1, []) for x in ball_detections]
+    
+    # 转换为 DataFrame
+    df = pd.DataFrame(positions, columns=['x1', 'y1', 'x2', 'y2'])
+    
+    # 如果没有有效数据，返回空列表
+    if df.empty or df[['x1', 'y1', 'x2', 'y2']].isna().all().all():
+        return []
+    
+    df['ball_hit'] = 0
+    
+    # 计算球中心的 Y 坐标
+    df['mid_y'] = (df['y1'] + df['y2']) / 2
+    
+    # 使用滚动平均平滑
+    df['mid_y_rolling_mean'] = df['mid_y'].rolling(window=5, min_periods=1, center=False).mean()
+    
+    # 计算 delta_y (Y 方向的速度变化)
+    df['delta_y'] = df['mid_y_rolling_mean'].diff()
+    
+    minimum_change_frames_for_hit = 25
+    
+    for i in range(1, len(df) - int(minimum_change_frames_for_hit * 1.2)):
+        negative_position_change = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[i + 1] < 0
+        positive_position_change = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[i + 1] > 0
+        
+        if negative_position_change or positive_position_change:
+            change_count = 0
+            for change_frame in range(i + 1, i + int(minimum_change_frames_for_hit * 1.2) + 1):
+                negative_position_change_following_frame = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[change_frame] < 0
+                positive_position_change_following_frame = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[change_frame] > 0
+                
+                if negative_position_change and negative_position_change_following_frame:
+                    change_count += 1
+                elif positive_position_change and positive_position_change_following_frame:
+                    change_count += 1
+            
+            if change_count > minimum_change_frames_for_hit - 1:
+                df['ball_hit'].iloc[i] = 1
+    
+    frame_nums_with_ball_hits = df[df['ball_hit'] == 1].index.tolist()
+    
+    return frame_nums_with_ball_hits
+
+
+def _convert_to_hit_moments(ball_detections: list[dict[int, list[float]]], 
+                              shot_frames: list[int], 
+                              video_fps: float) -> list[dict]:
+    """
+    将击球帧索引列表转换为 hit_moments 格式
+    
+    参数:
+        ball_detections: 球检测列表
+        shot_frames: 击球帧索引列表
+        video_fps: 视频帧率
+        
+    返回:
+        hit_moments 格式列表: [{"frame_idx": idx, "time_s": t, "ball_pos": (x, y)}, ...]
+    """
+    hit_moments = []
+    
+    for frame_idx in shot_frames:
+        if frame_idx < len(ball_detections) and 1 in ball_detections[frame_idx]:
+            x1, y1, x2, y2 = ball_detections[frame_idx][1]
+            ball_pos = ((x1 + x2) / 2, (y1 + y2) / 2)
+            
+            hit_moments.append({
+                "frame_idx": frame_idx,
+                "time_s": frame_idx / video_fps,
+                "ball_pos": ball_pos,
+                "detection_method": "trajectory_analysis"  # 标记检测方法
+            })
+    
+    return hit_moments
+
+
 def analyze_ball_trajectory(
     analysis_id: str,
     video_path: Path,
@@ -184,12 +279,36 @@ def analyze_ball_trajectory(
     # 插值填补缺失的检测 (参考 Tennis_AI_mainland)
     interpolated_detections = _interpolate_ball_positions(ball_detections)
 
-    # 检测击球时刻
+    # 检测击球时刻 - 使用两种方法
     hit_moments = []
+    
+    # 方法1: 基于球拍检测 (如果可用)
     if racket_model and any(r is not None for r in racket_detections):
-        from app.pipeline.racket_tracking import find_hit_moments
-        hit_moments = find_hit_moments(interpolated_detections, racket_detections, video_fps)
-        logger.info(f"Found {len(hit_moments)} hit moments")
+        from app.pipeline.racket_tracking import find_hit_moments as find_hit_by_racket
+        racket_hit_moments = find_hit_by_racket(interpolated_detections, racket_detections, video_fps)
+        hit_moments.extend(racket_hit_moments)
+        logger.info(f"Found {len(racket_hit_moments)} hit moments by racket detection")
+    
+    # 方法2: 基于轨迹分析 (从 Tennis_AI_mainland 移植)
+    trajectory_hit_frames = get_ball_shot_frames(interpolated_detections)
+    if trajectory_hit_frames:
+        trajectory_hit_moments = _convert_to_hit_moments(
+            interpolated_detections, trajectory_hit_frames, video_fps
+        )
+        hit_moments.extend(trajectory_hit_moments)
+        logger.info(f"Found {len(trajectory_hit_moments)} hit moments by trajectory analysis")
+    
+    # 去重 (基于帧索引)
+    seen_frames = set()
+    unique_hit_moments = []
+    for moment in hit_moments:
+        frame_idx = moment["frame_idx"]
+        if frame_idx not in seen_frames:
+            seen_frames.add(frame_idx)
+            unique_hit_moments.append(moment)
+    
+    hit_moments = unique_hit_moments
+    logger.info(f"Total unique hit moments: {len(hit_moments)}")
 
     # 计算检测统计
     valid_count = sum(1 for d in interpolated_detections if 1 in d)
