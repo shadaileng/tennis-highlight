@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -44,7 +45,9 @@ async def start_ball_analysis(
     async def run():
         try:
             await update_analysis_status(ball_analysis_id, "analyzing")
-            artifact_path, _ = analyze_ball_trajectory(
+            start_time = time.time()
+            logger.info(f"[{ball_analysis_id}] Starting ball trajectory analysis...")
+            artifact_path, _, video_output_path = analyze_ball_trajectory(
                 analysis_id=ball_analysis_id,
                 video_path=video_path,
                 video_duration_s=analysis["duration_s"],
@@ -53,10 +56,13 @@ async def start_ball_analysis(
                 range_end_s=analysis["range_end_s"] or analysis["duration_s"],
                 progress_cb=None,
             )
+            elapsed = time.time() - start_time
+            logger.info(f"[{ball_analysis_id}] Ball trajectory analysis completed in {elapsed:.2f}s")
             await complete_analysis(
                 ball_analysis_id,
                 artifact_path=str(artifact_path),
-                instant_knobs_json=json.dumps({"sample_fps": req.sample_fps}),
+                instant_knobs_json=json.dumps({"sample_fps": sample_fps}),
+                video_path=str(video_output_path) if video_output_path else None,
             )
         except Exception as e:
             logger.exception("Ball trajectory analysis failed")
@@ -79,15 +85,32 @@ async def get_ball_trajectory(analysis_id: str):
         }
 
     artifact = load_ball_artifact(artifact_path)
+    metadata = artifact.get("metadata", {})
+
+    # 从 ball_detections 转换为 trajectory 格式
+    ball_detections = artifact.get("ball_detections", [])
+    trajectory = []
+    for i, det in enumerate(ball_detections):
+        if 1 in det:
+            x1, y1, x2, y2 = det[1]
+            # 转换为归一化坐标
+            w = metadata.get("video_width", 1920)
+            h = metadata.get("video_height", 1080)
+            trajectory.append({
+                "time_s": metadata.get("range_start_s", 0) + i / metadata.get("sample_fps", 4),
+                "x": (x1 + x2) / 2 / w,
+                "y": (y1 + y2) / 2 / h,
+                "bbox": {"x1": x1 / w, "y1": y1 / h, "x2": x2 / w, "y2": y2 / h},
+            })
+
     return {
-        "trajectory": artifact["trajectory"],
-        "summary": artifact["summary"],
-        "metadata": artifact["metadata"],
+        "trajectory": trajectory,
+        "summary": artifact.get("summary", {}),
+        "metadata": metadata,
     }
 
 
 class BallFromVideoRequest(BaseModel):
-    sample_fps: float = 4.0
     range_start_s: float | None = None
     range_end_s: float | None = None
 
@@ -116,7 +139,7 @@ async def start_ball_analysis_from_video(
         video_id=video_id,
         algorithm=BALL_ALGORITHM,
         noninstant_knobs_json=json.dumps({}),
-        instant_knobs_json=json.dumps({"sample_fps": req.sample_fps}),
+        instant_knobs_json=json.dumps({}),
         range_start_s=range_start,
         range_end_s=range_end,
     )
@@ -124,19 +147,24 @@ async def start_ball_analysis_from_video(
     async def run():
         try:
             await update_analysis_status(ball_analysis_id, "analyzing")
-            artifact_path, _ = analyze_ball_trajectory(
+            start_time = time.time()
+            logger.info(f"[{ball_analysis_id}] Starting ball trajectory analysis...")
+            artifact_path, _, video_output_path = analyze_ball_trajectory(
                 analysis_id=ball_analysis_id,
                 video_path=video_path,
                 video_duration_s=duration,
-                sample_fps=req.sample_fps,
+                sample_fps=30.0,  # 传入视频帧率用于 metadata，实际逐帧检测
                 range_start_s=range_start,
                 range_end_s=range_end,
                 progress_cb=None,
             )
+            elapsed = time.time() - start_time
+            logger.info(f"[{ball_analysis_id}] Ball trajectory analysis completed in {elapsed:.2f}s")
             await complete_analysis(
                 ball_analysis_id,
                 artifact_path=str(artifact_path),
-                instant_knobs_json=json.dumps({"sample_fps": req.sample_fps}),
+                instant_knobs_json=json.dumps({}),
+                video_path=str(video_output_path) if video_output_path else None,
             )
         except Exception as e:
             logger.exception("Ball trajectory analysis failed")

@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -10,10 +11,29 @@ from app.database import init_db
 from app.routers import analysis, ball, download, export, pose, process, segments, status, upload, videos
 
 
+# 东八区时区
+CST = timezone(timedelta(hours=8))
+
+
+class LocalTimeFormatter(logging.Formatter):
+    """使用东八区时间的日志格式化器"""
+
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=CST)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat()
+
+
 def _configure_logging() -> None:
     level = logging.DEBUG if settings.verbose else logging.INFO
     fmt = "%(asctime)s %(levelname)-7s [%(name)s] %(message)s"
-    logging.basicConfig(level=level, format=fmt, datefmt="%H:%M:%S")
+    handler = logging.StreamHandler()
+    handler.setFormatter(LocalTimeFormatter(fmt, datefmt="%Y-%m-%d %H:%M:%S"))
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
     # Quiet down noisy libs unless verbose
     if not settings.verbose:
         logging.getLogger("multipart").setLevel(logging.WARNING)
