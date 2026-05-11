@@ -87,15 +87,20 @@ async def get_ball_trajectory(analysis_id: str):
     artifact = load_ball_artifact(artifact_path)
     metadata = artifact.get("metadata", {})
 
+    # 验证必需的 metadata 字段
+    if "video_width" not in metadata or "video_height" not in metadata:
+        raise HTTPException(400, "Invalid artifact: missing video_width or video_height in metadata")
+
     # 从 ball_detections 转换为 trajectory 格式
     ball_detections = artifact.get("ball_detections", [])
     trajectory = []
+    w = metadata["video_width"]
+    h = metadata["video_height"]
     for i, det in enumerate(ball_detections):
-        if 1 in det:
-            x1, y1, x2, y2 = det[1]
-            # 转换为归一化坐标
-            w = metadata.get("video_width", 1920)
-            h = metadata.get("video_height", 1080)
+        # 兼容字符串和整数类型的 key
+        bbox = det.get(1) or det.get("1")
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
             trajectory.append({
                 "time_s": metadata.get("range_start_s", 0) + i / metadata.get("sample_fps", 4),
                 "x": (x1 + x2) / 2 / w,

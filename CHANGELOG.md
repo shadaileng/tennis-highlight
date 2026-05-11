@@ -1,5 +1,120 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-12 (UTC+8)
+
+### 修复：球轨迹 API 返回空数据问题 - JSON key 类型兼容
+
+**问题描述：**
+`GET /ball-trajectory/{analysis_id}` 接口返回的 `trajectory` 列表始终为空，虽然逐帧检测时网球被正确标记。
+
+**根本原因：**
+`ball.py` 第 94 行使用整数 `1` 检查 key，但 `ball.json.gz` 中存储的 key 是字符串 `"1"`（JSON 序列化导致）。
+
+```python
+# 原代码 - key 类型不匹配
+if 1 in det:  # False，因为 key 是 "1"
+    x1, y1, x2, y2 = det[1]
+```
+
+**解决方案：**
+兼容整数和字符串两种 key 类型。
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/routers/ball.py` | 兼容 `det.get(1)` 和 `det.get("1")` |
+
+**核心代码变更：**
+
+```python
+# ball.py - 兼容字符串和整数 key
+for i, det in enumerate(ball_detections):
+    bbox = det.get(1) or det.get("1")
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+```
+
+**测试结果：**
+- 新增测试文件 `tests/test_ball_trajectory_api_coordinates.py`
+- 10 个测试用例全部通过
+- API 返回 213 个轨迹点，检测率 100%
+
+---
+
+## 2026-05-12 (UTC+8)
+
+### 修复：网球轨迹不同步问题 - 逐帧检测 + 归一化坐标
+
+**问题描述：**
+网球轨迹跟随不同步，检测和渲染的时间戳映射错位。
+
+**根本原因：**
+1. 原检测逻辑每帧都检测，但时间戳计算错误
+2. 原渲染逻辑使用 `int()` 取整导致帧到检测索引映射错误
+3. 检测读取了整个视频而非指定范围
+
+**解决方案：**
+- 逐帧检测，使用视频实际帧率
+- 移除前端 `sample_fps` 参数传递
+- 修复检测范围，只读取 `range_start_s` 到 `range_end_s`
+- 坐标归一化返回，前端 canvas 根据尺寸渲染
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | 逐帧检测，`sample_fps = video_fps`，只检测指定范围 |
+| `app/pipeline/video_renderer.py` | 逐帧绘制，`frame_idx` 直接作为检测索引 |
+| `app/routers/ball.py` | 移除 API 中 `sample_fps` 参数 |
+| `static/app.js` | 移除前端 `sample_fps` 参数传递 |
+
+**核心代码变更：**
+
+```python
+# ball_tracking.py - 逐帧检测指定范围
+num_target_frames = int(duration * video_fps)  # 实际要检测的帧数
+while frame_idx < num_target_frames:
+    ret, frame = cap.read()
+    ball_dict = _detect_frame(frame, model)
+    ball_detections.append(ball_dict)
+    frame_idx += 1
+
+# metadata 中 sample_fps = video_fps
+metadata = {
+    "sample_fps": video_fps,  # 逐帧检测
+    ...
+}
+
+# ball.py - API 不再接收 sample_fps
+class BallFromVideoRequest(BaseModel):
+    range_start_s: float | None = None
+    range_end_s: float | None = None
+```
+
+```javascript
+// app.js - 前端不传递 sample_fps
+body: JSON.stringify({ 
+    range_start_s: rangeStart,
+    range_end_s: rangeEnd,
+}),
+```
+
+**坐标系统：**
+
+| 层级 | 格式 | 示例 |
+|------|------|------|
+| 原始像素 | `[x1, y1, x2, y2]` | `[100, 200, 150, 250]` |
+| 归一化 (0-1) | `{x, y, bbox}` | `{x: 0.05, y: 0.18}` |
+| Canvas 像素 | `p.x * canvasWidth` | `960 * 0.05 = 48` |
+
+**效果：**
+- 检测和渲染完全同步
+- 轨迹正确跟随网球
+- 拖尾效果基于归一化坐标正确渲染
+
+---
+
 ## 2026-05-09 19:15:00 (UTC+8)
 
 ### 优化：网球轨迹跟随紧密性优化 - 添加轨迹插值
