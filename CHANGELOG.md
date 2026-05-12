@@ -1,5 +1,56 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-12 10:02:00 (UTC+8)
+
+### 优化：网球轨迹样式 - 白色→橙黄色平滑曲线
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/video_renderer.py` | 轨迹颜色/长度/平滑度优化，移除球体标记 |
+
+**连续修改记录：**
+
+| # | 修改 | 说明 |
+|---|------|------|
+| 1 | 颜色：青绿色 → 橙色→淡黄色渐变 | 参考专业转播样式 |
+| 2 | 宽度：渐变粗细 → 等宽曲线 | 每层固定厚度 3/5/7 |
+| 3 | 长度：25帧 → 10帧 → 7个网球长度 | 控制点从 25 → 15 → 7 |
+| 4 | 平滑：直线段 → **Catmull-Rom 样条插值** | 控制点间插值 8 个子点，消除锯齿 |
+| 5 | 渐变色：橙色→淡黄 → 白色→橙黄色 | 末端纯白，球端橙黄 BGR(30,200,255) |
+| 6 | 球体：移除发光标记 | 只有轨迹，不单独标记球位 |
+
+**核心代码变更：**
+
+```python
+# Catmull-Rom 样条插值（新增）
+def _catmull_rom_chunk(p0, p1, p2, p3, num_pts=8):
+    """4个控制点平滑插值 p1→p2，生成 num_pts 个点"""
+    for i in range(num_pts):
+        t = i / (num_pts - 1)
+        t2 = t * t; t3 = t2 * t
+        x = 0.5 * (2*p1[0] + (-p0[0]+p2[0])*t + ... + (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*t3)
+        y = 0.5 * (2*p1[1] + (-p0[1]+p2[1])*t + ... + (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*t3)
+
+# 轨迹绘制（修改）
+trail_length = min(7, len(trajectory_points))       # 7个网球长度
+smooth_pts = []
+for i in range(len(raw_pts) - 1):
+    chunk = _catmull_rom_chunk(p0, p1, p2, p3, 8)    # 平滑插值
+    smooth_pts.extend(chunk)
+
+for layer in range(3):                               # 三层等宽发光
+    for i in range(1, len(smooth_pts)):
+        t = i / (len(smooth_pts) - 1)
+        b = int(255 - 225*t)  # 白色→橙黄
+        g = int(255 - 55*t)
+        r = 255
+        cv2.line(overlay, smooth_pts[i-1], smooth_pts[i], (b,g,r), 3+layer*2)
+```
+
+---
+
 ## 2026-05-12 09:44:54 (UTC+8)
 
 ### 新增：击球瞬间 - 细长菱形飞出效果

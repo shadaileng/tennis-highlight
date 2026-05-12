@@ -17,6 +17,27 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str, float | None], None]
 
+
+def _catmull_rom_chunk(p0, p1, p2, p3, num_pts: int = 8) -> list[tuple[int, int]]:
+    """Catmull-Rom 样条插值 p1→p2，生成 num_pts 个平滑插值点"""
+    pts = []
+    for i in range(num_pts):
+        t = i / (num_pts - 1) if num_pts > 1 else 0
+        t2 = t * t
+        t3 = t2 * t
+        x = int(0.5 * (
+            2 * p1[0] + (-p0[0] + p2[0]) * t +
+            (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 +
+            (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3
+        ))
+        y = int(0.5 * (
+            2 * p1[1] + (-p0[1] + p2[1]) * t +
+            (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 +
+            (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3
+        ))
+        pts.append((x, y))
+    return pts
+
 # 放射性光芒系统
 _spark_effects: list[dict] = []
 
@@ -303,43 +324,39 @@ def draw_ball_trajectory_video(
                     # 添加到轨迹
                     trajectory_points.append((cx, cy))
 
-                    # 绘制发光拖尾效果 (参考图片: 青绿色发光拖尾)
-                    if len(trajectory_points) > 1:
-                        # 使用最近15个点，创建渐隐拖尾
-                        trail_length = min(15, len(trajectory_points))
+                    # 绘制轨迹曲线 (Catmull-Rom 平滑, 白色→橙黄色渐变)
+                    if len(trajectory_points) >= 2:
+                        # 取最近 7 个点作为控制点（约7个网球长度）
+                        trail_length = min(7, len(trajectory_points))
                         start_idx = len(trajectory_points) - trail_length
-                        pts = trajectory_points[start_idx:]
+                        raw_pts = trajectory_points[start_idx:]
 
-                        # 创建发光效果 - 多层绘制实现模糊发光
+                        # 通过 Catmull-Rom 样条生成平滑插值点
+                        smooth_pts = []
+                        for i in range(len(raw_pts) - 1):
+                            p0 = raw_pts[max(0, i - 1)]
+                            p1 = raw_pts[i]
+                            p2 = raw_pts[i + 1]
+                            p3 = raw_pts[min(len(raw_pts) - 1, i + 2)]
+                            chunk = _catmull_rom_chunk(p0, p1, p2, p3, num_pts=8)
+                            smooth_pts.extend(chunk)
+
+                        # 三层发光绘制
                         for layer in range(3):
-                            alpha_base = 0.3 + layer * 0.25  # 0.3, 0.55, 0.8
+                            layer_alpha = 0.25 + layer * 0.2
 
-                            for i in range(1, len(pts)):
-                                progress = i / (len(pts) - 1)  # 0.0 -> 1.0
-                                # 青绿色渐变: 头部亮青色，尾部暗青色
-                                r = int(50 * progress)
-                                g = int(200 + 55 * progress)
-                                b = int(180 + 75 * progress)
-                                alpha = alpha_base * progress
+                            for i in range(1, len(smooth_pts)):
+                                t = i / (len(smooth_pts) - 1)
+                                # 白色(t=0) → 橙黄色(t=1)
+                                b = int(255 - 225 * t)
+                                g = int(255 - 55 * t)
+                                r = 255
+                                color = (b, g, r)
+                                thickness = 3 + layer * 2
 
-                                color = (b, g, r)  # OpenCV 使用 BGR
-                                thickness = max(2, int((3 - layer) * progress * 3))
-
-                                # 使用半透明叠加
                                 overlay = frame.copy()
-                                cv2.line(overlay, pts[i - 1], pts[i], color, thickness)
-                                cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-
-                    # 绘制当前球位置 (发光球体)
-                    # 外层光晕
-                    for radius, alpha in [(20, 0.2), (14, 0.4), (10, 0.6)]:
-                        overlay = frame.copy()
-                        cv2.circle(overlay, (cx, cy), radius, (180, 230, 100), -1)
-                        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-
-                    # 核心亮点
-                    cv2.circle(frame, (cx, cy), 6, (200, 255, 220), -1)
-                    cv2.circle(frame, (cx, cy), 4, (255, 255, 255), -1)
+                                cv2.line(overlay, smooth_pts[i - 1], smooth_pts[i], color, thickness)
+                                cv2.addWeighted(overlay, layer_alpha, frame, 1 - layer_alpha, 0, frame)
 
             # 写入帧
             out.write(frame)
