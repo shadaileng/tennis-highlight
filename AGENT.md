@@ -29,7 +29,7 @@ tennis-highlight/
 │   ├── models.py                 # Pydantic 请求/响应模型
 │   ├── pipeline/                 # 核心处理管线
 │   │   ├── ball_tracking.py      # YOLO 网球检测 + 插值 + 击球检测
-│   │   ├── video_renderer.py     # 轨迹视频渲染（Catmull-Rom 样条）
+│   │   ├── video_renderer.py     # 轨迹视频渲染（Catmull-Rom 样条 + ffmpeg H.264 pipe）
 │   │   ├── racket_tracking.py    # 球拍检测
 │   │   ├── motion_analysis.py    # 运动检测核心算法
 │   │   ├── orchestrator.py       # 后台任务调度

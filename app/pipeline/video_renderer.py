@@ -7,6 +7,7 @@
 
 import logging
 import random
+import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -278,12 +279,23 @@ def draw_ball_trajectory_video(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # 创建视频写入器
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(output_path), fourcc, video_fps, (width, height))
-
-    if not out.isOpened():
-        raise RuntimeError(f"Cannot create video writer for: {output_path}")
+    # 使用 ffmpeg pipe 直接编码 H.264，浏览器兼容
+    ffmpeg_cmd = [
+        'ffmpeg',
+        '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-s', f'{width}x{height}',
+        '-pix_fmt', 'bgr24',
+        '-r', str(video_fps),
+        '-i', '-',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-preset', 'fast',
+        '-crf', '23',
+        str(output_path),
+    ]
+    proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
     logger.info(f"Rendering ball trajectory video: {width}x{height} @ {video_fps}fps, {total_frames} frames")
 
@@ -380,8 +392,8 @@ def draw_ball_trajectory_video(
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, ball_color, 2)
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), ball_color, 2)
 
-            # 写入帧
-            out.write(frame)
+            # 写入帧到 ffmpeg stdin
+            proc.stdin.write(frame.tobytes())
             frame_idx += 1
 
             # 报告进度
@@ -391,7 +403,10 @@ def draw_ball_trajectory_video(
 
     finally:
         cap.release()
-        out.release()
+        proc.stdin.close()
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed with return code {proc.returncode}")
         logger.info(f"Ball trajectory video saved to: {output_path}")
 
     return output_path

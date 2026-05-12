@@ -1,5 +1,23 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-12 14:25:00 (UTC+8)
+
+### feat: video_renderer 使用 ffmpeg pipe 直接编码 H.264
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/video_renderer.py` | 用 ffmpeg stdin pipe 替换 cv2.VideoWriter |
+
+### 详细说明
+
+1. 替换 cv2.VideoWriter（mp4v 编码器，浏览器兼容性差）为 ffmpeg pipe 直接编码 H.264
+2. 通过 subprocess.Popen 启动 ffmpeg，逐帧将 OpenCV 渲染结果（BGR24 raw 格式）写入 stdin
+3. ffmpeg 参数：libx264 编码、yuv420p 像素格式（浏览器兼容）、preset fast、crf 23
+4. 预期效果：生成的 MP4 文件可直接在浏览器中播放，无需额外转码
+
+---
+
 ## 2026-05-12 14:08:00 (UTC+8)
 
 ### docs: AGENT.md + 项目规则 — 自动同步与开发完成流程
