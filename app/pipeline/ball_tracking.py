@@ -104,6 +104,63 @@ def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
     return ball_dict
 
 
+def _filter_stationary_tracks(ball_detections: list[dict[int, list[float]]], min_movement_px: float = 15.0) -> list[dict[int, list[float]]]:
+    """
+    过滤掉几乎不动的误检 track（背景固定位置的误检）
+
+    真正的网球在视频中应该有明显位移。
+    固定位置的误检通常是球场边线、地面标记等。
+    """
+    if not ball_detections:
+        return ball_detections
+
+    # 收集所有 track_id
+    all_track_ids: set[int] = set()
+    for det in ball_detections:
+        all_track_ids.update(det.keys())
+
+    tracks_to_keep: set[int] = set()
+    for tid in all_track_ids:
+        # 找出该 track 的第一次和最后一次出现
+        first_pos = None
+        last_pos = None
+        for det in ball_detections:
+            if tid in det:
+                bbox = det[tid]
+                cx = (bbox[0] + bbox[2]) / 2
+                cy = (bbox[1] + bbox[3]) / 2
+                if first_pos is None:
+                    first_pos = (cx, cy)
+                last_pos = (cx, cy)
+
+        if first_pos is None or last_pos is None:
+            continue
+
+        # 计算总位移
+        dx = last_pos[0] - first_pos[0]
+        dy = last_pos[1] - first_pos[1]
+        total_displacement = (dx * dx + dy * dy) ** 0.5
+
+        if total_displacement >= min_movement_px:
+            tracks_to_keep.add(tid)
+        else:
+            logger.info(f"Filtered stationary track {tid}: displacement={total_displacement:.1f}px < {min_movement_px}px (false positive)")
+
+    # 至少保留一个 track
+    if not tracks_to_keep and all_track_ids:
+        logger.warning("All tracks filtered as stationary, keeping the one with most frames")
+        track_frame_counts = {tid: sum(1 for d in ball_detections if tid in d) for tid in all_track_ids}
+        tracks_to_keep.add(max(track_frame_counts, key=track_frame_counts.get))
+
+    # 过滤
+    result: list[dict[int, list[float]]] = []
+    for det in ball_detections:
+        filtered = {tid: bbox for tid, bbox in det.items() if tid in tracks_to_keep}
+        result.append(filtered)
+
+    return result
+
+
 def _interpolate_ball_positions(ball_detections: list[dict[int, list[float]]]) -> list[dict[int, list[float]]]:
     """
     插值填补缺失的网球位置，支持多个球各自独立插值
@@ -364,6 +421,9 @@ def analyze_ball_trajectory(
 
     # 插值填补缺失的检测 (参考 Tennis_AI_mainland)
     interpolated_detections = _interpolate_ball_positions(ball_detections)
+
+    # 过滤几乎不动的误检 track（固定位置误检，如球场边线等）
+    interpolated_detections = _filter_stationary_tracks(interpolated_detections, min_movement_px=15.0)
 
     # 检测击球时刻 - 使用两种方法
     hit_moments = []
