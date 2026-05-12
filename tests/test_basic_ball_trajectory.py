@@ -1,15 +1,15 @@
 """
 基础测试：网球轨迹检测 + 击球效果
 
-对 input_video.mp4 运行完整检测流水线，验证：
+对指定视频运行完整检测流水线，验证：
 1. 球检测正常，坐标有效
 2. 击球时刻正确识别
 3. 轨迹渲染视频成功生成
 
 用法:
-    python tests/test_basic_ball_trajectory.py                  # 默认：全长检测
-    python tests/test_basic_ball_trajectory.py --duration 3.0   # 指定时长
-    python tests/test_basic_ball_trajectory.py --start 1.0      # 指定起始时间
+    python tests/test_basic_ball_trajectory.py <video>                      # 全长检测
+    python tests/test_basic_ball_trajectory.py <video> --duration 3.0       # 指定时长
+    python tests/test_basic_ball_trajectory.py <video> --start 1.0          # 指定起始时间
 """
 
 import argparse
@@ -20,7 +20,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-_VIDEO = Path(__file__).parent.parent / "data" / "uploads" / "input_video.mp4"
 _OUT_ANALYSIS = Path(__file__).parent.parent / "data" / "analysis"
 _OUT_VIDEO = Path(__file__).parent.parent / "data" / "ball_videos"
 
@@ -150,7 +149,7 @@ def run(video_path: Path, duration_s: float, start_s: float):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="网球轨迹 + 击球效果基础测试")
-    parser.add_argument("video", nargs="?", default=str(_VIDEO), help="视频路径")
+    parser.add_argument("video", type=str, help="视频路径（必需）")
     parser.add_argument("--duration", type=float, default=None,
                         help="检测时长（秒，默认视频全长）")
     parser.add_argument("--start", type=float, default=0.0, help="起始时间（秒）")
