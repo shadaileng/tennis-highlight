@@ -119,16 +119,18 @@ def get_ball_shot_frames(ball_detections: list[dict[int, list[float]]]) -> list[
     if df.empty or df[['x1', 'y1', 'x2', 'y2']].isna().all().all():
         return []
     
-    df['ball_hit'] = 0
+    # 使用 .loc 避免链式赋值警告
+    df = df.copy()  # 确保我们有独立的副本
+    df.loc[:, 'ball_hit'] = 0
     
     # 计算球中心的 Y 坐标
-    df['mid_y'] = (df['y1'] + df['y2']) / 2
+    df.loc[:, 'mid_y'] = (df['y1'] + df['y2']) / 2
     
     # 使用滚动平均平滑
-    df['mid_y_rolling_mean'] = df['mid_y'].rolling(window=5, min_periods=1, center=False).mean()
+    df.loc[:, 'mid_y_rolling_mean'] = df['mid_y'].rolling(window=5, min_periods=1, center=False).mean()
     
     # 计算 delta_y (Y 方向的速度变化)
-    df['delta_y'] = df['mid_y_rolling_mean'].diff()
+    df.loc[:, 'delta_y'] = df['mid_y_rolling_mean'].diff()
     
     minimum_change_frames_for_hit = 25
     
@@ -148,7 +150,7 @@ def get_ball_shot_frames(ball_detections: list[dict[int, list[float]]]) -> list[
                     change_count += 1
             
             if change_count > minimum_change_frames_for_hit - 1:
-                df['ball_hit'].iloc[i] = 1
+                df.loc[i, 'ball_hit'] = 1
     
     frame_nums_with_ball_hits = df[df['ball_hit'] == 1].index.tolist()
     
@@ -367,6 +369,7 @@ def analyze_ball_trajectory(
             range_start_s=range_start_s,
             sample_fps=sample_fps,
             progress_cb=progress_cb,
+            hit_moments=hit_moments,
         )
         logger.info(f"Ball trajectory video saved to: {video_output_path}")
 

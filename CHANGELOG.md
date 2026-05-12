@@ -1,5 +1,74 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-12 09:44:54 (UTC+8)
+
+### 新增：击球瞬间 - 细长菱形飞出效果
+
+**功能描述：**
+将击球火花效果从粒子系统改为"细长菱形扩散飞出"效果，模拟击球瞬间的能量爆发。
+
+**效果特征：**
+1. 每个击球点随机生成 **15-25个细长菱形**
+2. 菱形**角度/大小/速度完全随机**，不规则扩散
+3. **近端宽（钝角朝向中心）→ 远端尖（锐角指向外）**
+4. 从击球点**向外飞出 + 逐渐缩小 + 逐渐变淡**
+5. **纯白色开始 → 逐帧渐淡 → 完全消失**，共持续 0.5 秒
+6. 菱形宽度/长度比仅 0.08~0.2（极细长）
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/video_renderer.py` | 完全重写火花系统为细长菱形扩散效果 |
+| `app/pipeline/ball_tracking.py` | 修复 `draw_ball_trajectory_video()` 未传入 `hit_moments` 参数的问题 |
+
+**核心代码变更：**
+
+```python
+# video_renderer.py - 菱形生成（第24-67行）
+def _init_sparks(hit_moments, video_fps):
+    for hit in hit_moments:
+        for _ in range(random.randint(15, 25)):
+            diamonds.append({
+                "angle": random.uniform(0, 2*pi),
+                "speed": random.uniform(10, 25),
+                "length": random.uniform(35, 70),
+                "width_ratio": random.uniform(0.08, 0.2),
+            })
+
+# 菱形顶点计算 - 近端宽远端尖
+def _get_diamond_vertices(cx, cy, direction_angle, distance, length, width_ratio):
+    far_extent = length * 0.65    # 远端尖点
+    near_extent = length * 0.35   # 近端基点（钝角）
+    half_width = length * width_ratio * 0.5
+    # 近端角度 = 2*arctan(0.5*width_ratio / 0.15) ≈ 53°
+    # 远端角度 = 2*arctan(0.5*width_ratio / 0.65) ≈ 14°
+    return [near_base, left, far_tip, right]
+
+# 绘制三层效果：外光晕 + 半透明填充 + 核心亮边
+def _draw_diamond(frame, ...):
+    cv2.fillPoly(overlay, [glow_arr], color)  # 外发光
+    cv2.addWeighted(alpha * 0.12)
+    cv2.fillPoly(overlay, [pts], color)        # 主菱形
+    cv2.addWeighted(alpha * 0.4)
+    cv2.polylines(overlay, [pts], True, white) # 亮边
+    cv2.addWeighted(alpha * 0.7)
+```
+
+```python
+# ball_tracking.py - 修复第365行
+# 修改前：draw_ball_trajectory_video(...)  # 缺少hit_moments
+# 修改后：draw_ball_trajectory_video(..., hit_moments=hit_moments)
+```
+
+**视觉演变记录：**
+1. 🔴 圆形粒子散射（橙黄色，不明显）
+2. 🔴 放射性线条（均匀分布，太单调）
+3. 🔴 锯齿闪电分支（效果怪异）
+4. 🟢 **细长菱形扩散飞出（当前效果）**
+
+---
+
 ## 2026-05-12 (UTC+8)
 
 ### 优化：整合 Tennis_AI_mainland 击球检测算法

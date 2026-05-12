@@ -8,7 +8,7 @@
 import logging
 import random
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
@@ -17,70 +17,206 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[float, str, float | None], None]
 
-# 火花粒子系统
-_spark_particles: list[dict] = []
+# 放射性光芒系统
+_spark_effects: list[dict] = []
 
 
 def _init_sparks(hit_moments: list[dict], video_fps: float):
-    """初始化火花粒子系统"""
-    global _spark_particles
-    _spark_particles = []
+    """初始化细长菱形飞出效果"""
+    global _spark_effects
+    _spark_effects = []
 
     for hit in hit_moments:
         frame_idx = hit.get("frame_idx", int(hit.get("time_s", 0) * video_fps))
         pos = hit.get("ball_pos", (0, 0))
+        
+        if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+            logger.warning(f"Invalid ball_pos for hit moment: {hit}")
+            continue
 
-        # 为每个击球时刻创建多个火花粒子
-        for _ in range(50):  # 50个粒子
+        # 创建15-25个细长菱形
+        num_diamonds = random.randint(15, 25)
+        diamonds = []
+        
+        for _ in range(num_diamonds):
             angle = random.uniform(0, 2 * np.pi)
-            speed = random.uniform(2, 8)
-            lifetime = random.uniform(0.2, 0.5)  # 0.2-0.5秒
-
-            _spark_particles.append({
-                "frame_start": frame_idx,
-                "lifetime_frames": int(lifetime * video_fps),
-                "x": pos[0],
-                "y": pos[1],
-                "vx": np.cos(angle) * speed,
-                "vy": np.sin(angle) * speed - 2,  # 向上偏移
-                "size": random.uniform(1, 3),
-                "color": (
-                    random.randint(200, 255),  # B
-                    random.randint(100, 200),  # G
-                    random.randint(0, 50),      # R
-                ),
+            speed = random.uniform(10, 25)
+            # 菱形总长度（较大 = 细长）
+            length = random.uniform(35, 70)
+            # 宽度比（非常小 = 极细长）
+            width_ratio = random.uniform(0.08, 0.2)
+            
+            diamonds.append({
+                "angle": angle,
+                "speed": speed,
+                "length": length,
+                "width_ratio": width_ratio,
             })
+
+        _spark_effects.append({
+            "frame_start": frame_idx,
+            "duration_frames": int(0.5 * video_fps),
+            "x": pos[0],
+            "y": pos[1],
+            "diamonds": diamonds,
+        })
+    
+    logger.info(f"Initialized {len(_spark_effects)} thin diamond effects for {len(hit_moments)} hit moments")
 
 
 def _draw_sparks(frame: np.ndarray, current_frame_idx: int) -> np.ndarray:
-    """在当前帧绘制火花粒子"""
+    """在当前帧绘制细长菱形飞出效果"""
+    global _spark_effects
+    
+    if not _spark_effects:
+        return frame
+    
     h, w = frame.shape[:2]
 
-    for p in _spark_particles:
-        age = current_frame_idx - p["frame_start"]
+    for effect in _spark_effects:
+        age = current_frame_idx - effect["frame_start"]
 
-        if age < 0 or age > p["lifetime_frames"]:
+        if age < 0 or age > effect["duration_frames"]:
             continue
 
-        # 计算粒子位置
-        progress = age / p["lifetime_frames"]
-        x = int(p["x"] + p["vx"] * age)
-        y = int(p["y"] + p["vy"] * age + 0.5 * 9.8 * (age/30) ** 2)  # 重力
-
-        if x < 0 or x >= w or y < 0 or y >= h:
+        progress = age / effect["duration_frames"]
+        # 纯白开始 → 逐渐变淡
+        alpha = max(0, 1.0 - progress ** 1.2)
+        if alpha <= 0:
             continue
-
-        # 透明度随生命周期衰减
-        alpha = 1.0 - progress
-        color = tuple(int(c * alpha) for c in p["color"])
-
-        # 绘制发光效果（多层）
-        for radius in [3, 2, 1]:
-            overlay = frame.copy()
-            cv2.circle(overlay, (x, y), int(p["size"] * radius), color, -1)
-            cv2.addWeighted(overlay, alpha * 0.5, frame, 1 - alpha * 0.5, 0, frame)
+        
+        cx, cy = int(effect["x"]), int(effect["y"])
+        
+        for diamond in effect["diamonds"]:
+            # 飞行距离
+            distance = diamond["speed"] * age
+            # 菱形逐渐变小（1.2倍起始 → 缩到0）
+            size_scale = 1.2 - progress * 1.2
+            if size_scale <= 0:
+                continue
+            
+            _draw_diamond(
+                frame,
+                cx, cy,
+                diamond["angle"],
+                distance,
+                diamond["length"] * size_scale,
+                diamond["width_ratio"],
+                alpha,
+            )
+        
+        # 中心高亮光晕（纯白，淡出）
+        if alpha > 0.2:
+            for radius, r_alpha in [(10, 0.25 * alpha), (5, 0.4 * alpha)]:
+                overlay = frame.copy()
+                cv2.circle(overlay, (cx, cy), radius, (255, 255, 255), -1)
+                cv2.addWeighted(overlay, r_alpha, frame, 1 - r_alpha, 0, frame)
 
     return frame
+
+
+def _get_diamond_vertices(
+    cx: int, cy: int,
+    direction_angle: float,
+    distance: float,
+    length: float,
+    width_ratio: float,
+) -> list[tuple[int, int]]:
+    """
+    计算细长菱形的4个顶点
+    
+    形状: 近端宽（钝角），远端尖（锐角）
+    - 菱形总长度 = length
+    - 最宽处宽度 = length * width_ratio (非常细)
+    - 最宽处靠近近端 (偏离中心向后 0.3*length)
+    - 尖点距离中心向前 0.7*length
+    """
+    if length < 3:
+        return []
+    
+    cos_dir = np.cos(direction_angle)
+    sin_dir = np.sin(direction_angle)
+    perp_cos = np.cos(direction_angle + np.pi / 2)
+    perp_sin = np.sin(direction_angle + np.pi / 2)
+    
+    # 菱形中心（从击球点飞出一定距离）
+    center_x = cx + cos_dir * distance
+    center_y = cy + sin_dir * distance
+    
+    half_width = length * width_ratio * 0.5
+    
+    # 沿方向: 远端尖点(+), 近端基点(-)
+    far_extent = length * 0.65    # 远端尖点（锐角）
+    near_offset = length * 0.2    # 最宽处偏移（在近端一侧）
+    near_extent = length * 0.35   # 近端基点（钝角）
+    
+    # 4个顶点
+    far_tip = (
+        int(center_x + cos_dir * far_extent),
+        int(center_y + sin_dir * far_extent),
+    )
+    near_base = (
+        int(center_x - cos_dir * near_extent),
+        int(center_y - sin_dir * near_extent),
+    )
+    right = (
+        int(center_x - cos_dir * near_offset + perp_cos * half_width),
+        int(center_y - sin_dir * near_offset + perp_sin * half_width),
+    )
+    left = (
+        int(center_x - cos_dir * near_offset - perp_cos * half_width),
+        int(center_y - sin_dir * near_offset - perp_sin * half_width),
+    )
+    
+    return [near_base, left, far_tip, right]
+
+
+def _draw_diamond(
+    frame: np.ndarray,
+    cx: int, cy: int,
+    direction_angle: float,
+    distance: float,
+    length: float,
+    width_ratio: float,
+    alpha: float,
+):
+    """绘制单个细长菱形（纯白 → 渐淡）"""
+    vertices = _get_diamond_vertices(cx, cy, direction_angle, distance, length, width_ratio)
+    
+    if len(vertices) < 4 or alpha <= 0.01:
+        return
+    
+    pts = np.array(vertices, dtype=np.int32).reshape((-1, 1, 2))
+    
+    # 纯白到渐淡
+    intensity = int(255 * min(1.0, alpha * 1.5))
+    color = (intensity, intensity, intensity)
+    
+    # 外层光晕菱形（放大）
+    glow_pts = []
+    for v in vertices:
+        gx = sum(p[0] for p in vertices) / 4
+        gy = sum(p[1] for p in vertices) / 4
+        glow_pts.append((
+            int(v[0] + (v[0] - gx) * 1.8),
+            int(v[1] + (v[1] - gy) * 1.8),
+        ))
+    glow_arr = np.array(glow_pts, dtype=np.int32).reshape((-1, 1, 2))
+    
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [glow_arr], color)
+    cv2.addWeighted(overlay, alpha * 0.12, frame, 1 - alpha * 0.12, 0, frame)
+    
+    # 主菱形（半透明填充）
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [pts], color)
+    cv2.addWeighted(overlay, alpha * 0.4, frame, 1 - alpha * 0.4, 0, frame)
+    
+    # 核心亮边（纯白）
+    if alpha > 0.15:
+        overlay = frame.copy()
+        cv2.polylines(overlay, [pts], True, (255, 255, 255), 1)
+        cv2.addWeighted(overlay, alpha * 0.7, frame, 1 - alpha * 0.7, 0, frame)
 
 
 def draw_ball_trajectory_video(
