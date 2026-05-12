@@ -252,6 +252,11 @@ bash scripts/test.sh
 ## Git 工作流
 
 - **分支策略**：功能分支 + main 主线
+- **开发完成收尾流程**（每次修改完成必须按顺序执行）：
+  1. 确认代码修改完成，测试通过
+  2. **更新 CHANGELOG.md**：在文件最顶部插入新日志条目（格式见下方）
+  3. **Git 提交**：`git add <文件> && git commit -m "<type>: <中文描述>"`
+  4. **同步 AGENT.md**：如需（参考 `sync-agent-md` 规则）
 - **提交消息格式**：`<type>: <中文描述>`
   - `feat:` — 新功能
   - `refactor:` — 重构
@@ -259,7 +264,26 @@ bash scripts/test.sh
   - `test:` — 测试
   - `docs:` — 文档
   - `chore:` — 杂项
-- **CHANGELOG**：按日期记录（`YYYY-MM-DD HH:MM:SS (UTC+8)`），不要用语义化版本
+- **CHANGELOG 条目格式**：按日期记录（`YYYY-MM-DD HH:MM:SS (UTC+8)`），不要用语义化版本
+
+  ```markdown
+  ## YYYY-MM-DD HH:MM:SS (UTC+8)
+
+  ### type: 简短标题
+
+  修改文件：
+  | 文件 | 修改内容 |
+  |------|----------|
+  | path/to/file.py | 改动描述 |
+
+  ### 详细说明
+
+  1. 做了什么
+  2. 怎么做的
+  3. 预期效果
+
+  ---
+  ```
 
 ## 禁止事项
 

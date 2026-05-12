@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-12 14:08:00 (UTC+8)
+
+### docs: AGENT.md + 项目规则 — 自动同步与开发完成流程
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `AGENT.md` | 顶部添加同步说明；Git 工作流增加收尾流程规范及 CHANGELOG 格式示例 |
+| `.codebuddy/rules/sync-agent-md.mdc` | 新建：项目变更时自动同步 AGENT.md 的触发规则 |
+| `.codebuddy/rules/dev-complete-flow.mdc` | 新建：开发完成后写入 CHANGELOG → 提交 Git 的标准化流程 |
+
+### 详细说明
+
+1. 新增 `dev-complete-flow` 项目规则：每次完成修改后按「确认目标 → 更新 CHANGELOG → Git 提交 → 同步 AGENT.md」顺序执行
+2. 新增 `sync-agent-md` 项目规则：指定哪些文件变更需要同步更新 AGENT.md，以及对应章节映射
+3. AGENT.md 更新：顶部添加 `⚠️ 注意` 提醒，Git 工作流部分增加完整收尾流程描述和 CHANGELOG 格式示例
+
+---
+
 ## 2026-05-12 10:02:00 (UTC+8)
 
 ### 优化：网球轨迹样式 - 白色→橙黄色平滑曲线
