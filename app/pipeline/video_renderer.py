@@ -291,8 +291,19 @@ def draw_ball_trajectory_video(
     start_frame = int(range_start_s * video_fps)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    # 用于绘制轨迹
-    trajectory_points: list[tuple[int, int]] = []
+    # 用于绘制轨迹 - 按 track_id 分开存储
+    trajectory_points: dict[int, list[tuple[int, int]]] = {}
+    # 为每个 track_id 分配不同颜色 (BGR 格式)
+    trajectory_colors = [
+        (0, 255, 255),    # 黄色 - 默认球的颜色
+        (255, 0, 0),      # 蓝色
+        (0, 255, 0),      # 绿色
+        (255, 0, 255),    # 紫色
+        (255, 128, 0),    # 青色
+        (0, 128, 255),    # 橙色
+        (128, 255, 255),  # 浅黄
+        (255, 255, 0),    # 红色
+    ]
 
     # 初始化火花粒子系统
     if hit_moments:
@@ -314,22 +325,29 @@ def draw_ball_trajectory_video(
             # 逐帧绘制检测结果
             if frame_idx < len(ball_detections):
                 ball_dict = ball_detections[frame_idx]
-                if 1 in ball_dict:
-                    x1, y1, x2, y2 = ball_dict[1]
+
+                for track_id, bbox in ball_dict.items():
+                    x1, y1, x2, y2 = bbox
 
                     # 计算中心点
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
 
-                    # 添加到轨迹
-                    trajectory_points.append((cx, cy))
+                    # 为该球的轨迹初始化
+                    if track_id not in trajectory_points:
+                        trajectory_points[track_id] = []
+                    trajectory_points[track_id].append((cx, cy))
 
-                    # 绘制轨迹曲线 (Catmull-Rom 平滑, 白色→橙黄色渐变)
-                    if len(trajectory_points) >= 2:
-                        # 取最近 7 个点作为控制点（约7个网球长度）
-                        trail_length = min(7, len(trajectory_points))
-                        start_idx = len(trajectory_points) - trail_length
-                        raw_pts = trajectory_points[start_idx:]
+                    # 获取该球的颜色
+                    ball_color = trajectory_colors[track_id % len(trajectory_colors)]
+
+                    # 绘制该球的轨迹曲线 (Catmull-Rom 平滑)
+                    pts = trajectory_points[track_id]
+                    if len(pts) >= 2:
+                        # 取最近 7 个点作为控制点
+                        trail_length = min(7, len(pts))
+                        start_idx = len(pts) - trail_length
+                        raw_pts = pts[start_idx:]
 
                         # 通过 Catmull-Rom 样条生成平滑插值点
                         smooth_pts = []
@@ -344,19 +362,23 @@ def draw_ball_trajectory_video(
                         # 三层发光绘制
                         for layer in range(3):
                             layer_alpha = 0.25 + layer * 0.2
-
                             for i in range(1, len(smooth_pts)):
                                 t = i / (len(smooth_pts) - 1)
-                                # 白色(t=0) → 橙黄色(t=1)
-                                b = int(255 - 225 * t)
-                                g = int(255 - 55 * t)
-                                r = 255
-                                color = (b, g, r)
+                                # 球的主体颜色保持不变，亮度渐变
+                                b = int(ball_color[0] * (t * 0.3 + 0.7))
+                                g = int(ball_color[1] * (t * 0.3 + 0.7))
+                                r_val = int(ball_color[2] * (t * 0.3 + 0.7))
+                                color = (b, g, r_val)
                                 thickness = 3 + layer * 2
 
                                 overlay = frame.copy()
                                 cv2.line(overlay, smooth_pts[i - 1], smooth_pts[i], color, thickness)
                                 cv2.addWeighted(overlay, layer_alpha, frame, 1 - layer_alpha, 0, frame)
+
+                    # 绘制球标记框（使用对应颜色）
+                    cv2.putText(frame, f"Ball {track_id}", (int(bbox[0]), int(bbox[1] - 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, ball_color, 2)
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), ball_color, 2)
 
             # 写入帧
             out.write(frame)

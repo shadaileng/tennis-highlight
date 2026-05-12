@@ -48,113 +48,159 @@ def _get_ball_model():
 
 def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
     """
-    检测单帧中的网球
+    检测单帧中的网球，支持多个球
 
     返回:
-        {1: [x1, y1, x2, y2]} 格式的边界框，track_id=1 固定
+        {track_id: [x1, y1, x2, y2]} 格式的边界框，每个球有唯一 track_id
         如果没有检测到，返回空字典 {}
     """
-    results = model.predict(frame, conf=0.15, verbose=False)[0]
+    # 使用 track 模式代替 predict，获得稳定的跨帧跟踪 ID
+    results = model.track(frame, persist=True, conf=0.15, verbose=False)[0]
 
     ball_dict = {}
     if results.boxes is not None and len(results.boxes) > 0:
         for box in results.boxes:
             result = box.xyxy.tolist()[0]
-            ball_dict[1] = result
+            # 使用跟踪 ID（如果有的话），否则用递增索引
+            if box.id is not None:
+                track_id = int(box.id.tolist()[0])
+            else:
+                track_id = len(ball_dict) + 1
+            ball_dict[track_id] = result
 
     return ball_dict
 
 
 def _interpolate_ball_positions(ball_detections: list[dict[int, list[float]]]) -> list[dict[int, list[float]]]:
     """
-    插值填补缺失的网球位置
+    插值填补缺失的网球位置，支持多个球各自独立插值
     参考 Tennis_AI_mainland/tennis_analysis/trackers/ball_tracker.py
     """
     if not ball_detections:
         return ball_detections
 
-    # 提取 [x1, y1, x2, y2] 列表
-    positions = [x.get(1, []) for x in ball_detections]
+    # 收集所有 track_id
+    all_track_ids: set[int] = set()
+    for det in ball_detections:
+        all_track_ids.update(det.keys())
 
-    # 转换为 DataFrame
-    df = pd.DataFrame(positions, columns=["x1", "y1", "x2", "y2"])
-
-    # 检查是否有有效数据
-    if df.empty or df[["x1", "y1", "x2", "y2"]].isna().all().all():
+    if not all_track_ids:
         return ball_detections
 
-    # 线性插值
-    df = df.interpolate()
-    df = df.bfill()
+    num_frames = len(ball_detections)
 
-    # 转回原格式
-    return [{1: x} for x in df.to_numpy().tolist()]
+    # 提取每个 track_id 的轨迹（缺失为 None/空列表）
+    per_track_data: dict[int, list[list[float]]] = {}
+    for tid in all_track_ids:
+        positions: list[list[float]] = []
+        for det in ball_detections:
+            positions.append(det.get(tid, []))
+        per_track_data[tid] = positions
+
+    # 对每个 track_id 独立插值
+    interpolated_per_track: dict[int, list[list[float]]] = {}
+    for tid in all_track_ids:
+        positions = per_track_data[tid]
+        df = pd.DataFrame(positions, columns=["x1", "y1", "x2", "y2"])
+        if not df.empty and not df[["x1", "y1", "x2", "y2"]].isna().all().all():
+            df = df.interpolate()
+            df = df.bfill()
+            interpolated_per_track[tid] = df.to_numpy().tolist()
+        else:
+            interpolated_per_track[tid] = positions
+
+    # 重新组合每帧
+    result: list[dict[int, list[float]]] = []
+    for frame_idx in range(num_frames):
+        frame_dict: dict[int, list[float]] = {}
+        for tid in all_track_ids:
+            pos = interpolated_per_track[tid][frame_idx]
+            # 跳过插值后仍然是 NaN 的位置
+            if pos and not any(isinstance(p, float) and np.isnan(p) for p in pos):
+                frame_dict[tid] = pos
+        result.append(frame_dict)
+
+    return result
 
 
 def get_ball_shot_frames(ball_detections: list[dict[int, list[float]]]) -> list[int]:
     """
-    基于球的轨迹方向变化检测击球时刻
+    基于球的轨迹方向变化检测击球时刻，支持多球
     参考 Tennis_AI_mainland/tennis_analysis/trackers/ball_tracker.py
-    
+
     算法原理:
-    1. 计算球中心的 Y 坐标
-    2. 使用滚动平均平滑轨迹
-    3. 计算 delta_y (Y 方向的速度变化)
-    4. 检测方向反转: 当 delta_y 从正变负或从负变正时，可能是击球点
-    5. 如果在连续 ~25 帧内方向变化一致，则判定为击球
-    
+    1. 对每个球的独立轨迹分别分析
+    2. 计算球中心的 Y 坐标
+    3. 使用滚动平均平滑轨迹
+    4. 计算 delta_y (Y 方向的速度变化)
+    5. 检测方向反转: 当 delta_y 从正变负或从负变正时，可能是击球点
+    6. 如果在连续 ~25 帧内方向变化一致，则判定为击球
+
     返回:
-        击球时刻的帧索引列表
+        击球时刻的帧索引列表（所有球的击球帧合并去重）
     """
     if not ball_detections:
         return []
-    
-    # 提取位置
-    positions = [x.get(1, []) for x in ball_detections]
-    
-    # 转换为 DataFrame
-    df = pd.DataFrame(positions, columns=['x1', 'y1', 'x2', 'y2'])
-    
-    # 如果没有有效数据，返回空列表
-    if df.empty or df[['x1', 'y1', 'x2', 'y2']].isna().all().all():
+
+    # 收集所有 track_id
+    all_track_ids: set[int] = set()
+    for det in ball_detections:
+        all_track_ids.update(det.keys())
+
+    if not all_track_ids:
         return []
-    
-    # 使用 .loc 避免链式赋值警告
-    df = df.copy()  # 确保我们有独立的副本
-    df.loc[:, 'ball_hit'] = 0
-    
-    # 计算球中心的 Y 坐标
-    df.loc[:, 'mid_y'] = (df['y1'] + df['y2']) / 2
-    
-    # 使用滚动平均平滑
-    df.loc[:, 'mid_y_rolling_mean'] = df['mid_y'].rolling(window=5, min_periods=1, center=False).mean()
-    
-    # 计算 delta_y (Y 方向的速度变化)
-    df.loc[:, 'delta_y'] = df['mid_y_rolling_mean'].diff()
-    
-    minimum_change_frames_for_hit = 25
-    
-    for i in range(1, len(df) - int(minimum_change_frames_for_hit * 1.2)):
-        negative_position_change = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[i + 1] < 0
-        positive_position_change = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[i + 1] > 0
-        
-        if negative_position_change or positive_position_change:
-            change_count = 0
-            for change_frame in range(i + 1, i + int(minimum_change_frames_for_hit * 1.2) + 1):
-                negative_position_change_following_frame = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[change_frame] < 0
-                positive_position_change_following_frame = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[change_frame] > 0
-                
-                if negative_position_change and negative_position_change_following_frame:
-                    change_count += 1
-                elif positive_position_change and positive_position_change_following_frame:
-                    change_count += 1
-            
-            if change_count > minimum_change_frames_for_hit - 1:
-                df.loc[i, 'ball_hit'] = 1
-    
-    frame_nums_with_ball_hits = df[df['ball_hit'] == 1].index.tolist()
-    
-    return frame_nums_with_ball_hits
+
+    all_shot_frames: set[int] = set()
+
+    for track_id in all_track_ids:
+        # 提取该球的轨迹
+        positions: list[list[float]] = [x.get(track_id, []) for x in ball_detections]
+
+        # 转换为 DataFrame
+        df = pd.DataFrame(positions, columns=['x1', 'y1', 'x2', 'y2'])
+
+        # 如果没有有效数据，跳过
+        if df.empty or df[['x1', 'y1', 'x2', 'y2']].isna().all().all():
+            continue
+
+        # 使用 .loc 避免链式赋值警告
+        df = df.copy()
+        df.loc[:, 'ball_hit'] = 0
+
+        # 计算球中心的 Y 坐标
+        df.loc[:, 'mid_y'] = (df['y1'] + df['y2']) / 2
+
+        # 使用滚动平均平滑
+        df.loc[:, 'mid_y_rolling_mean'] = df['mid_y'].rolling(window=5, min_periods=1, center=False).mean()
+
+        # 计算 delta_y (Y 方向的速度变化)
+        df.loc[:, 'delta_y'] = df['mid_y_rolling_mean'].diff()
+
+        minimum_change_frames_for_hit = 25
+
+        for i in range(1, len(df) - int(minimum_change_frames_for_hit * 1.2)):
+            negative_position_change = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[i + 1] < 0
+            positive_position_change = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[i + 1] > 0
+
+            if negative_position_change or positive_position_change:
+                change_count = 0
+                for change_frame in range(i + 1, i + int(minimum_change_frames_for_hit * 1.2) + 1):
+                    negative_position_change_following_frame = df['delta_y'].iloc[i] > 0 and df['delta_y'].iloc[change_frame] < 0
+                    positive_position_change_following_frame = df['delta_y'].iloc[i] < 0 and df['delta_y'].iloc[change_frame] > 0
+
+                    if negative_position_change and negative_position_change_following_frame:
+                        change_count += 1
+                    elif positive_position_change and positive_position_change_following_frame:
+                        change_count += 1
+
+                if change_count > minimum_change_frames_for_hit - 1:
+                    df.loc[i, 'ball_hit'] = 1
+
+        track_shot_frames = df[df['ball_hit'] == 1].index.tolist()
+        all_shot_frames.update(track_shot_frames)
+        logger.debug(f"Track {track_id}: found {len(track_shot_frames)} shot frames")
+
+    return sorted(all_shot_frames)
 
 
 def _convert_to_hit_moments(ball_detections: list[dict[int, list[float]]], 
@@ -162,29 +208,34 @@ def _convert_to_hit_moments(ball_detections: list[dict[int, list[float]]],
                               video_fps: float) -> list[dict]:
     """
     将击球帧索引列表转换为 hit_moments 格式
-    
+    支持多球：击球时使用该帧中任意可用的球位置
+
     参数:
         ball_detections: 球检测列表
         shot_frames: 击球帧索引列表
         video_fps: 视频帧率
-        
+
     返回:
         hit_moments 格式列表: [{"frame_idx": idx, "time_s": t, "ball_pos": (x, y)}, ...]
     """
     hit_moments = []
-    
+
     for frame_idx in shot_frames:
-        if frame_idx < len(ball_detections) and 1 in ball_detections[frame_idx]:
-            x1, y1, x2, y2 = ball_detections[frame_idx][1]
-            ball_pos = ((x1 + x2) / 2, (y1 + y2) / 2)
-            
-            hit_moments.append({
-                "frame_idx": frame_idx,
-                "time_s": frame_idx / video_fps,
-                "ball_pos": ball_pos,
-                "detection_method": "trajectory_analysis"  # 标记检测方法
-            })
-    
+        if frame_idx < len(ball_detections):
+            ball_dict = ball_detections[frame_idx]
+            if ball_dict:
+                # 使用该帧中第一个检测到的球的位置
+                first_tid = list(ball_dict.keys())[0]
+                x1, y1, x2, y2 = ball_dict[first_tid]
+                ball_pos = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+                hit_moments.append({
+                    "frame_idx": frame_idx,
+                    "time_s": frame_idx / video_fps,
+                    "ball_pos": ball_pos,
+                    "detection_method": "trajectory_analysis",
+                })
+
     return hit_moments
 
 
@@ -313,7 +364,8 @@ def analyze_ball_trajectory(
     logger.info(f"Total unique hit moments: {len(hit_moments)}")
 
     # 计算检测统计
-    valid_count = sum(1 for d in interpolated_detections if 1 in d)
+    valid_count = sum(1 for d in interpolated_detections if len(d) > 0)
+    total_ball_instances = sum(len(d) for d in interpolated_detections)
     detection_rate = (valid_count / len(interpolated_detections) * 100) if interpolated_detections else 0
 
     metadata = {
@@ -337,6 +389,7 @@ def analyze_ball_trajectory(
         "total_samples": len(interpolated_detections),
         "detected_frames": valid_count,
         "detection_rate": detection_rate,
+        "total_ball_instances": total_ball_instances,
         "avg_confidence": 0.5,  # 插值后的点使用默认置信度
     }
 
