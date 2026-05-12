@@ -46,6 +46,36 @@ def _get_ball_model():
     return _ball_model
 
 
+def _is_valid_ball_bbox(bbox: list[float], frame_shape) -> bool:
+    """检查边界框是否为合理的网球
+
+    过滤条件:
+    1. 尺寸不能太大（网球在画面中很小）
+    2. 宽高比不能太离谱（网球接近圆形→正方形）
+    3. 尺寸不能太小（排除噪声）
+    """
+    x1, y1, x2, y2 = bbox
+    w = x2 - x1
+    h = y2 - y1
+    frame_h, frame_w = frame_shape[:2]
+
+    # 最小尺寸（太小的框是噪声）
+    if w < 5 or h < 5:
+        return False
+
+    # 最大尺寸（网球不会超过画面宽/高的 1/6）
+    max_ball_size = max(frame_w, frame_h) * 0.18
+    if w > max_ball_size or h > max_ball_size:
+        return False
+
+    # 宽高比（网球检测框接近正方形）
+    aspect_ratio = w / h if h > 0 else 0
+    if aspect_ratio < 0.4 or aspect_ratio > 2.5:
+        return False
+
+    return True
+
+
 def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
     """
     检测单帧中的网球，支持多个球
@@ -55,18 +85,21 @@ def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
         如果没有检测到，返回空字典 {}
     """
     # 使用 track 模式代替 predict，获得稳定的跨帧跟踪 ID
-    results = model.track(frame, persist=True, conf=0.15, verbose=False)[0]
+    results = model.track(frame, persist=True, conf=0.25, verbose=False)[0]
 
     ball_dict = {}
     if results.boxes is not None and len(results.boxes) > 0:
         for box in results.boxes:
-            result = box.xyxy.tolist()[0]
+            bbox = box.xyxy.tolist()[0]
+            # 尺寸过滤：排除明显不是网球的误检
+            if not _is_valid_ball_bbox(bbox, frame.shape):
+                continue
             # 使用跟踪 ID（如果有的话），否则用递增索引
             if box.id is not None:
                 track_id = int(box.id.tolist()[0])
             else:
                 track_id = len(ball_dict) + 1
-            ball_dict[track_id] = result
+            ball_dict[track_id] = bbox
 
     return ball_dict
 
