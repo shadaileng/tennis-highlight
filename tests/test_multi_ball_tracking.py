@@ -7,6 +7,9 @@
 3. 验证多球各自有独立的轨迹数据，不会互相覆盖
 4. 验证多球渲染视频能正确生成
 
+结果输出:
+  所有 artifact (*.ball.json.gz) 和渲染视频 (*.mp4) 输出到 data/ball_videos/
+
 用法:
     python tests/test_multi_ball_tracking.py <video_path> [--duration N] [--skip-scan]
 
@@ -16,11 +19,6 @@
 """
 
 import argparse
-import gzip
-import json
-import shutil
-import sys
-import tempfile
 import time
 from collections import Counter
 from pathlib import Path
@@ -30,6 +28,9 @@ import numpy as np
 
 # 默认测试视频路径（项目根目录下的数据目录）
 _DEFAULT_VIDEO = Path(__file__).parent.parent / "data" / "uploads" / "acb378840d7015bd23faa08dd82d1e61_raw.mp4"
+# 测试输出目录
+ANALYSIS_DIR = Path(__file__).parent.parent / "data" / "analysis"   # 分析结果 (artifact)
+VIDEO_DIR = Path(__file__).parent.parent / "data" / "ball_videos"    # 渲染视频
 
 
 def scan_multi_ball_frames(video_path: Path, max_frames: int = 300, start_frame: int = 0) -> list[tuple[int, int, list[int]]]:
@@ -113,16 +114,18 @@ def test_full_pipeline(video_path: Path, test_duration_s: float = 3.0):
 
     analysis_id = f"test_multi_ball_{int(time.time())}"
 
-    # 临时目录
-    tmp_dir = Path(tempfile.mkdtemp())
-    try:
-        # 临时覆盖配置
-        import app.config
-        orig_analysis = app.config.settings.analysis_dir
-        orig_videos = app.config.settings.ball_videos_dir
-        app.config.settings.analysis_dir = tmp_dir / "analysis"
-        app.config.settings.ball_videos_dir = tmp_dir / "ball_videos"
+    # 输出目录
+    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
+    # 临时覆盖配置指向输出目录
+    import app.config
+    orig_analysis = app.config.settings.analysis_dir
+    orig_videos = app.config.settings.ball_videos_dir
+    app.config.settings.analysis_dir = ANALYSIS_DIR       # artifact → data/analysis
+    app.config.settings.ball_videos_dir = VIDEO_DIR       # 视频  → data/ball_videos
+
+    try:
         # 进度回调
         def progress(pct, msg, eta):
             print(f"  [{pct:5.1f}%] {msg}" + (f" (剩余{eta:.0f}s)" if eta else ""))
@@ -218,11 +221,10 @@ def test_full_pipeline(video_path: Path, test_duration_s: float = 3.0):
             print(f"\n  ⚠️ 渲染视频未生成 (可能是模型或配置问题)")
 
     finally:
-        # 恢复配置
+        # 恢复配置（不删除输出目录）
         import app.config
         app.config.settings.analysis_dir = orig_analysis
         app.config.settings.ball_videos_dir = orig_videos
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return artifact
 
@@ -283,16 +285,19 @@ def test_render_multi_ball_segment(video_path: Path, start_s: float, duration_s:
 
     from app.pipeline.ball_tracking import analyze_ball_trajectory
 
-    analysis_id = f"test_render_multi_{int(time.time())}"
+    analysis_id = f"render_multi_{int(time.time())}"
 
-    tmp_dir = Path(tempfile.mkdtemp())
+    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 临时覆盖配置指向输出目录
+    import app.config
+    orig_analysis = app.config.settings.analysis_dir
+    orig_videos = app.config.settings.ball_videos_dir
+    app.config.settings.analysis_dir = ANALYSIS_DIR       # artifact → data/analysis
+    app.config.settings.ball_videos_dir = VIDEO_DIR       # 视频  → data/ball_videos
+
     try:
-        import app.config
-        orig_analysis = app.config.settings.analysis_dir
-        orig_videos = app.config.settings.ball_videos_dir
-        app.config.settings.analysis_dir = tmp_dir / "analysis"
-        app.config.settings.ball_videos_dir = tmp_dir / "ball_videos"
-
         def progress(pct, msg, eta):
             print(f"  [{pct:5.1f}%] {msg}")
 
@@ -315,30 +320,25 @@ def test_render_multi_ball_segment(video_path: Path, start_s: float, duration_s:
         print(f"  track_ids: {sorted(all_track_ids)}")
 
         if video_output_path and video_output_path.exists():
-            # 复制到工作目录方便查看
-            output_name = f"multi_ball_render_{start_s:.0f}s_{duration_s:.0f}s.mp4"
-            final_path = Path.cwd() / output_name
-            shutil.copy(video_output_path, final_path)
-            print(f"\n  ✅ 渲染视频已保存: {final_path}")
+            print(f"\n  ✅ 渲染视频: {video_output_path}")
         else:
             print(f"\n  ⚠️ 渲染视频未生成")
-
-        # 清理 artifact
-        if artifact_path.exists():
-            artifact_path.unlink()
 
     finally:
         import app.config
         app.config.settings.analysis_dir = orig_analysis
         app.config.settings.ball_videos_dir = orig_videos
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="多球跟踪测试 - 验证视频中多个球的检测和独立轨迹绘制",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+输出目录:
+  分析结果 (artifact) -> {ANALYSIS_DIR}
+  渲染视频  (mp4)    -> {VIDEO_DIR}
+
 示例:
   # 使用默认视频
   python tests/test_multi_ball_tracking.py
