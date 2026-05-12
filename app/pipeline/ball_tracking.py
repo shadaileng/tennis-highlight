@@ -21,7 +21,12 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[float, str, float | None], None]
 
 BALL_ALGORITHM = "ball_tracking_yolo"
-BALL_ARTIFACT_VERSION = 4
+BALL_ARTIFACT_VERSION = 5  # 增加 artifact 版本：新增批量推理
+
+# 帧跳跃检测参数（CPU 环境：每 N 帧检测一帧，其余帧通过插值补全）
+DETECTION_STEP = 3  # 每 3 帧检测 1 帧，~3x 加速，由 _interpolate_ball_positions 补全
+
+BATCH_IOU_THRESHOLD = 0.1  # IoU 跟踪匹配阈值
 
 BALL_MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "yolo5_last.pt"
 
@@ -76,6 +81,136 @@ def _is_valid_ball_bbox(bbox: list[float], frame_shape) -> bool:
     return True
 
 
+def _bbox_iou(box1: list[float], box2: list[float]) -> float:
+    """计算两个边界框的 IoU (Intersection over Union)"""
+    x1_1, y1_1, x2_1, y2_1 = box1
+    x1_2, y1_2, x2_2, y2_2 = box2
+
+    xi1 = max(x1_1, x1_2)
+    yi1 = max(y1_1, y1_2)
+    xi2 = min(x2_1, x2_2)
+    yi2 = min(y2_1, y2_2)
+
+    inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+
+    box1_area = (x2_1 - x1_1) * (y2_1 - y1_1)
+    box2_area = (x2_2 - x1_2) * (y2_2 - y1_2)
+
+    union_area = box1_area + box2_area - inter_area
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+# 全局跟踪器状态（跨 batch 保持 track ID 连续性）
+_batch_tracker_next_id = 1
+_batch_tracker_prev_tracks: dict[int, list[float]] = {}
+
+
+def _reset_batch_tracker():
+    """重置批处理跟踪器状态（每个新视频开始时调用一次）"""
+    global _batch_tracker_next_id, _batch_tracker_prev_tracks
+    _batch_tracker_next_id = 1
+    _batch_tracker_prev_tracks = {}
+
+
+def _batch_detect(
+    frames: list[np.ndarray],
+    model,
+    frame_shape,
+    chunk_size: int = 16,
+) -> list[dict[int, list[float]]]:
+    """
+    批量检测 + IoU 跟踪（仅 GPU 环境下有效）
+
+    使用 model.predict() 对一批帧做批量推理，
+    再用 IoU 贪心匹配实现跨帧跟踪 ID 分配。
+    内部自动按 chunk_size 分块，避免 OOM。
+    CPU 环境建议使用逐帧 _detect_frame + 帧跳跃，而非此函数。
+
+    Args:
+        frames: 一批视频帧
+        model: YOLO 模型
+        frame_shape: (height, width) 用于尺寸过滤
+        chunk_size: 每次 predict 的最大帧数
+
+    Returns:
+        list[dict[int, list[float]]] — 每帧的检测结果
+    """
+    global _batch_tracker_next_id, _batch_tracker_prev_tracks
+
+    if not frames:
+        return []
+
+    all_results: list[dict[int, list[float]]] = []
+
+    for chunk_start in range(0, len(frames), chunk_size):
+        chunk = frames[chunk_start:chunk_start + chunk_size]
+        results = model.predict(chunk, conf=0.15, verbose=False)
+
+        frame_bboxes: list[list[list[float]]] = []
+        for r in results:
+            frame_boxes = []
+            if r.boxes is not None and len(r.boxes) > 0:
+                for box in r.boxes:
+                    bbox = box.xyxy.tolist()[0]
+                    if _is_valid_ball_bbox(bbox, frame_shape):
+                        frame_boxes.append(bbox)
+            frame_bboxes.append(frame_boxes)
+
+        prev_tracks = dict(_batch_tracker_prev_tracks)
+
+        for curr_bboxes in frame_bboxes:
+            if not curr_bboxes:
+                all_results.append({})
+                prev_tracks = {}
+                continue
+
+            if not prev_tracks:
+                curr_tracks = {}
+                for bbox in curr_bboxes:
+                    curr_tracks[_batch_tracker_next_id] = bbox
+                    _batch_tracker_next_id += 1
+            else:
+                prev_ids = list(prev_tracks.keys())
+                prev_boxes = [prev_tracks[tid] for tid in prev_ids]
+                iou_matrix = np.zeros((len(curr_bboxes), len(prev_boxes)))
+                for i, curr_box in enumerate(curr_bboxes):
+                    for j, prev_box in enumerate(prev_boxes):
+                        iou_matrix[i, j] = _bbox_iou(curr_box, prev_box)
+
+                matched_curr: set[int] = set()
+                curr_tracks: dict[int, list[float]] = {}
+
+                candidates = [
+                    (iou_matrix[i, j], i, j)
+                    for i in range(len(curr_bboxes))
+                    for j in range(len(prev_boxes))
+                ]
+                candidates.sort(reverse=True, key=lambda x: x[0])
+
+                for iou_val, i, j in candidates:
+                    if i in matched_curr:
+                        continue
+                    if iou_val < BATCH_IOU_THRESHOLD:
+                        break
+                    if prev_ids[j] in curr_tracks:
+                        continue
+                    curr_tracks[prev_ids[j]] = curr_bboxes[i]
+                    matched_curr.add(i)
+
+                for i in range(len(curr_bboxes)):
+                    if i not in matched_curr:
+                        curr_tracks[_batch_tracker_next_id] = curr_bboxes[i]
+                        _batch_tracker_next_id += 1
+
+            all_results.append(curr_tracks)
+            prev_tracks = curr_tracks
+
+        _batch_tracker_prev_tracks = dict(prev_tracks) if prev_tracks else {}
+
+    return all_results
+
+
+# 保留单帧检测函数（用于兼容或测试）
 def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
     """
     检测单帧中的网球，支持多个球
@@ -373,16 +508,17 @@ def analyze_ball_trajectory(
     if progress_cb:
         progress_cb(5.0, f"Detecting balls in {num_target_frames} frames", None)
 
-    # 逐帧检测 (只检测指定范围内的帧)
+    # 逐帧检测 + 帧跳跃加速（CPU 环境：每 DETECTION_STEP 帧只检测 1 帧）
+    # 未检测的帧通过 _interpolate_ball_positions 线性插值补全
     ball_detections: list[dict[int, list[float]]] = []
-    racket_detections: list[dict | None] = []  # 新增：球拍检测
+    racket_detections: list[dict | None] = []
     frame_idx = 0
     started = time.monotonic()
 
     # 尝试加载球拍检测模型
     racket_model = None
     try:
-        from app.pipeline.racket_tracking import _get_racket_model
+        from app.pipeline.racket_tracking import _get_racket_model, detect_racket
         racket_model = _get_racket_model()
         if racket_model:
             logger.info("Racket detection model loaded")
@@ -394,14 +530,19 @@ def analyze_ball_trajectory(
         if not ret:
             break
 
-        # 每帧都检测球
-        ball_dict = _detect_frame(frame, model)
+        # 帧跳跃：每 DETECTION_STEP 帧检测一次，其余帧留空由插值补全
+        if frame_idx % DETECTION_STEP == 0:
+            ball_dict = _detect_frame(frame, model)
+        else:
+            ball_dict = {}
         ball_detections.append(ball_dict)
 
-        # 检测球拍（如果模型可用）
+        # 球拍检测同样跳跃（与球检测同步）
         if racket_model:
-            from app.pipeline.racket_tracking import detect_racket
-            racket = detect_racket(frame, racket_model)
+            if frame_idx % DETECTION_STEP == 0:
+                racket = detect_racket(frame, racket_model)
+            else:
+                racket = None
             racket_detections.append(racket)
         else:
             racket_detections.append(None)
@@ -415,7 +556,7 @@ def analyze_ball_trajectory(
             eta = remaining / rate if rate > 0 else None
             pct = 5.0 + (frame_idx / num_target_frames) * 80.0 if num_target_frames > 0 else 85.0
             if progress_cb:
-                progress_cb(min(85.0, pct), f"Detected {frame_idx}/{num_target_frames}", eta)
+                progress_cb(min(85.0, pct), f"Detected {frame_idx}/{num_target_frames} (step={DETECTION_STEP})", eta)
 
     cap.release()
 

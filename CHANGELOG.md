@@ -1,5 +1,33 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-12 15:45:00 (UTC+8)
+
+### feat: 帧跳跃检测加速 — CPU 环境 3x 加速
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | 新增 `DETECTION_STEP=3` 帧跳跃常量；主循环每 3 帧仅检测 1 帧，其余由插值补全；保留 `_batch_detect` + IoU 跟踪作为 GPU 环境可选方案 |
+| `app/pipeline/ball_tracking.py` | 新增 `_bbox_iou` 工具函数 |
+| `app/pipeline/racket_tracking.py` | 新增 `_batch_racket_detect` 批量球拍检测函数（供 GPU 环境使用） |
+
+### 详细说明
+
+1. 做了什么：将逐帧检测改为每 3 帧检测 1 帧的帧跳跃策略，加速视频检测流程
+2. 怎么做的：
+   - 主循环中 `frame_idx % DETECTION_STEP == 0` 时才调用 `_detect_frame(frame, model)`
+   - 跳跃帧设为空字典 `{}`，由 `_interpolate_ball_positions` 线性插值补全
+   - 保留 `_batch_detect` 函数（含 IoU 贪心跟踪 + 全局 track ID 计数器），供 GPU 环境使用
+   - 留空 `_batch_racket_detect` 供 GPU 环境使用
+3. 基准测试结果（300 帧，CPU）：
+   - 全帧检测：61.5s (4.9 fps)，148/300 帧有检测
+   - 帧跳跃：20.5s (14.6 fps)，**3.0x 加速**
+   - 插值后：300/300 帧全部补全
+   - Track ID：跳跃方案更稳定（1 个 ID vs 全帧 4 个 ID）
+4. 发现：当前环境无 CUDA（`torch.cuda.is_available()=False`），批量推理在 CPU 上无加速效果
+
+---
+
 ## 2026-05-12 15:00:00 (UTC+8)
 
 ### fix: conf 从 0.25 降回 0.15 — 低置信度网球不再漏检

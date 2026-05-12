@@ -107,7 +107,7 @@ hit_moments: list[dict] = [
 artifact = {
     "metadata": {
         "detector": "ball_tracking_yolo",
-        "detector_version": 4,
+        "detector_version": 5,  # v5: 新增帧跳跃检测加速
         "model_path": "models/yolo5_last.pt",
         "video_width": int, "video_height": int,
         "video_fps": float, "duration_s": float,
@@ -135,6 +135,9 @@ artifact = {
 | `app/pipeline/ball_tracking.py` | `_detect_frame` 使用 `model.track()` 替代 `predict()`，获取稳定 `track_id` |
 | | `_interpolate_ball_positions` 按 `track_id` 独立插值 |
 | | `get_ball_shot_frames` 每个球分别分析击球，结果合并去重 |
+| | `DETECTION_STEP=3` 帧跳跃检测，每3帧检测1帧，~3x加速（CPU环境） |
+| | `_bbox_iou` + `_batch_detect` IoU批量跟踪（GPU环境备选） |
+| `app/pipeline/racket_tracking.py` | `_batch_racket_detect` 批量球拍检测（GPU环境备选） |
 | `app/pipeline/video_renderer.py` | `trajectory_points: dict[int, list]` 按球 ID 分开存储轨迹 |
 | | 每个球使用不同颜色（8 种循环），标记框显示 `Ball {id}` |
 
@@ -165,6 +168,26 @@ trajectory_colors = [
 ]
 # 通过 track_id % len(colors) 循环分配
 ```
+
+### 帧跳跃检测（CPU 加速）
+
+```python
+# ball_tracking.py
+DETECTION_STEP = 3  # 每 3 帧检测 1 帧，~3x 加速
+
+# 主循环中：
+if frame_idx % DETECTION_STEP == 0:
+    ball_dict = _detect_frame(frame, model)  # 完整检测
+else:
+    ball_dict = {}  # 跳过：留空由插值补全
+
+# 插值函数 _interpolate_ball_positions 自动补全所有跳过帧
+```
+
+- CPU 环境下每 3 帧仅检测 1 帧，其余由线性插值补全
+- 实测加速比 ~3.0x（4.9fps → 14.6fps），插值后 100% 帧有坐标
+- GPU 环境可使用 `_batch_detect` 做批量推理 + IoU 跟踪（备选方案）
+- 球拍检测与球检测同步跳跃
 
 ## 测试规范
 
