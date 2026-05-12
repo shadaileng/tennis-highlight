@@ -85,7 +85,7 @@ def _detect_frame(frame: np.ndarray, model) -> dict[int, list[float]]:
         如果没有检测到，返回空字典 {}
     """
     # 使用 track 模式代替 predict，获得稳定的跨帧跟踪 ID
-    results = model.track(frame, persist=True, conf=0.25, verbose=False)[0]
+    results = model.track(frame, persist=True, conf=0.15, verbose=False)[0]
 
     ball_dict = {}
     if results.boxes is not None and len(results.boxes) > 0:
