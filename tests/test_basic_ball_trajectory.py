@@ -7,7 +7,9 @@
 3. 轨迹渲染视频成功生成
 
 用法:
-    python tests/test_basic_ball_trajectory.py [--duration N] [--start S]
+    python tests/test_basic_ball_trajectory.py                  # 默认：全长检测
+    python tests/test_basic_ball_trajectory.py --duration 3.0   # 指定时长
+    python tests/test_basic_ball_trajectory.py --start 1.0      # 指定起始时间
 """
 
 import argparse
@@ -149,8 +151,17 @@ def run(video_path: Path, duration_s: float, start_s: float):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="网球轨迹 + 击球效果基础测试")
     parser.add_argument("video", nargs="?", default=str(_VIDEO), help="视频路径")
-    parser.add_argument("--duration", type=float, default=3.0, help="检测时长（秒）")
+    parser.add_argument("--duration", type=float, default=None,
+                        help="检测时长（秒，默认视频全长）")
     parser.add_argument("--start", type=float, default=0.0, help="起始时间（秒）")
     args = parser.parse_args()
+
+    # 未指定 duration 时自动使用视频全长
+    if args.duration is None:
+        cap = cv2.VideoCapture(str(Path(args.video)))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        args.duration = total_frames / fps
 
     run(Path(args.video), args.duration, args.start)
