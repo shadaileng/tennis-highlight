@@ -340,10 +340,10 @@ if __name__ == "__main__":
   渲染视频  (mp4)    -> {VIDEO_DIR}
 
 示例:
-  # 使用默认视频
+  # 使用默认视频，全时长检测
   python tests/test_multi_ball_tracking.py
 
-  # 指定视频文件，只跑流水线测试（跳过扫描）
+  # 指定视频文件，全时长检测（跳过扫描）
   python tests/test_multi_ball_tracking.py path/to/video.mp4 --skip-scan
 
   # 指定时长和渲染段
@@ -353,8 +353,8 @@ if __name__ == "__main__":
     parser.add_argument("video", nargs="?",
                         default=str(_DEFAULT_VIDEO),
                         help="测试视频路径（默认: data/uploads/目录下的默认视频）")
-    parser.add_argument("--duration", type=float, default=3.0,
-                        help="流水线测试的检测时长（秒），默认 3.0")
+    parser.add_argument("--duration", type=float, default=None,
+                        help="流水线测试的检测时长（秒），默认全时长")
     parser.add_argument("--render-start", type=float, default=None,
                         help="渲染视频的起始时间（秒），默认使用多球最密集段")
     parser.add_argument("--render-duration", type=float, default=2.0,
@@ -387,14 +387,14 @@ if __name__ == "__main__":
         multi_frames = test_basic_scan(video_path)
 
         # 测试2: 完整流水线
-        test_full_pipeline(video_path, test_duration_s=min(args.duration, duration_s))
+        test_full_pipeline(video_path, test_duration_s=min(args.duration or duration_s, duration_s))
 
         # 测试3: 全视频分段时间扫描
         test_scan_all_times(video_path)
     else:
         print("⏭️ 跳过扫描测试 (--skip-scan)")
         # 仍然跑流水线测试
-        test_full_pipeline(video_path, test_duration_s=min(args.duration, duration_s))
+        test_full_pipeline(video_path, test_duration_s=min(args.duration or duration_s, duration_s))
 
     # 渲染测试
     if args.render_start is not None:
