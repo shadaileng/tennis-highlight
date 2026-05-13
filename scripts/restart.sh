@@ -15,7 +15,6 @@ stop_service() {
             echo "Stopping service (PID: $PID)..."
             kill "$PID"
             sleep 2
-            # Force kill if still running
             if kill -0 "$PID" 2>/dev/null; then
                 kill -9 "$PID" 2>/dev/null
                 sleep 1
@@ -23,27 +22,47 @@ stop_service() {
         fi
         rm -f "$PID_FILE"
     fi
-    # Also kill by port
+    # Kill by process name
     pkill -f "uvicorn app.main:app" 2>/dev/null
+    # Kill by port (most reliable — catches any lingering process on 8000)
+    fuser -k 8000/tcp 2>/dev/null
     sleep 1
     echo "Service stopped."
 }
 
 start_service() {
+    # 确保端口未被占用
+    if fuser 8000/tcp 2>/dev/null; then
+        echo "Port 8000 still in use. Waiting..."
+        sleep 2
+        fuser -k 8000/tcp 2>/dev/null
+        sleep 1
+    fi
+
     echo "Starting service..."
     nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > "$LOG_FILE" 2>&1 &
     PID=$!
     echo "$PID" > "$PID_FILE"
-    sleep 3
-    
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Service started (PID: $PID)"
-        tail -5 "$LOG_FILE"
-    else
-        echo "Failed to start service. Check $LOG_FILE"
-        tail -20 "$LOG_FILE"
-        exit 1
-    fi
+
+    # Wait for startup (up to 10 seconds)
+    for i in $(seq 1 10); do
+        sleep 1
+        if ! kill -0 "$PID" 2>/dev/null; then
+            echo "Failed to start service. Check $LOG_FILE"
+            tail -20 "$LOG_FILE"
+            exit 1
+        fi
+        if grep -q "Uvicorn running on" "$LOG_FILE" 2>/dev/null; then
+            echo "Service started (PID: $PID)"
+            tail -5 "$LOG_FILE"
+            return 0
+        fi
+    done
+
+    # Timeout
+    echo "Failed to start service (timeout). Check $LOG_FILE"
+    tail -20 "$LOG_FILE"
+    exit 1
 }
 
 restart_service() {

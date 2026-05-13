@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 10:45:00 (UTC+8)
+
+### fix: 启动脚本端口被占用时无法正确停止旧进程
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `scripts/restart.sh` | stop_service 增加 `fuser -k 8000/tcp` 端口级清理；start_service 增加端口检测+"Uvicorn running on" 启动确认 |
+
+### 详细说明
+
+1. 做了什么：修复 `restart.sh` 在端口被旧进程占用时无法正确停止并重启动的问题
+2. 怎么做的：
+   - `stop_service`：增加 `fuser -k 8000/tcp` 作为兜底（比 `pkill` 更可靠，直接杀端口）
+   - `start_service`：启动前先用 `fuser` 检查 8000 端口；启动后用轮循等待日志中出现 `Uvicorn running on`，最长 10s，超时则报错退出
+3. 预期效果：无论旧进程如何启动，`restart` 都能先清理端口再启动，不再出现 `address already in use`
+
+---
+
 ## 2026-05-13 10:40:00 (UTC+8)
 
 ### fix: orchestrator.py lambda 闭包无法被 pickle 导致 ProcessPoolExecutor 报错
