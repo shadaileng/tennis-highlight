@@ -403,14 +403,14 @@ async def update_video_court_calibration(video_id: str, calibration_json: str | 
 
 
 async def delete_video_cascade(video_id: str) -> dict:
-    """Delete a video row plus its segments/exports. Returns paths to clean from disk."""
+    """Delete a video row plus its segments/exports/analyses. Returns paths to clean from disk."""
     def _q():
         with _connect() as conn:
             row = conn.execute(
                 "SELECT filepath FROM videos WHERE id = ?", (video_id,)
             ).fetchone()
             if row is None:
-                return {"upload": None, "exports": []}
+                return {"upload": None, "exports": [], "artifacts": [], "ball_videos": []}
             upload = row["filepath"]
             export_rows = conn.execute(
                 "SELECT output_filepath FROM exports "
@@ -418,6 +418,13 @@ async def delete_video_cascade(video_id: str) -> dict:
                 (video_id,),
             ).fetchall()
             exports = [r["output_filepath"] for r in export_rows]
+            # Collect analysis artifacts and ball trajectory videos before deleting
+            analysis_rows = conn.execute(
+                "SELECT artifact_path, video_path FROM analyses WHERE video_id = ?",
+                (video_id,),
+            ).fetchall()
+            artifacts = [r["artifact_path"] for r in analysis_rows if r["artifact_path"]]
+            ball_videos = [r["video_path"] for r in analysis_rows if r["video_path"]]
             conn.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
             conn.execute("DELETE FROM analyses WHERE video_id = ?", (video_id,))
             conn.execute("DELETE FROM exports WHERE video_id = ?", (video_id,))
@@ -431,6 +438,8 @@ async def delete_video_cascade(video_id: str) -> dict:
                 "upload": upload,
                 "delete_upload": (shared["n"] == 0),
                 "exports": exports,
+                "artifacts": artifacts,
+                "ball_videos": ball_videos,
             }
     return await asyncio.to_thread(_q)
 

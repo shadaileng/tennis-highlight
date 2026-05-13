@@ -83,7 +83,7 @@ async def delete_video(video_id: str) -> dict:
 
     removed = []
     upload_paths = [paths["upload"]] if paths.get("delete_upload", True) else []
-    for p in [*upload_paths, *paths["exports"]]:
+    for p in [*upload_paths, *paths["exports"], *paths["artifacts"], *paths["ball_videos"]]:
         if not p:
             continue
         path = Path(p)

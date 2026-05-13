@@ -1,5 +1,25 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 10:56:00 (UTC+8)
+
+### fix: 删除视频时未清理 data/analysis 和 data/ball_videos 下的残留文件
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/database.py` | `delete_video_cascade` 返回新增 `artifacts` 和 `ball_videos` 路径列表 |
+| `app/routers/videos.py` | 删除路由将 `artifacts` 和 `ball_videos` 中的文件一并删除 |
+
+### 详细说明
+
+1. 做了什么：删除视频时同时清理 `data/analysis/` 下的分析 artifacts（`.ball.json.gz`, `.pose.json.gz`, `.npz`）和 `data/ball_videos/` 下的轨迹视频（`{analysis_id}_ball_trajectory.mp4`）
+2. 怎么做的：
+   - `delete_video_cascade._q()` 中，在删除 analyses 记录前先查询 `artifact_path` 和 `video_path` 字段，收集后一并返回
+   - `delete_video` 路由将它们加入遍历删除的路径列表
+3. 预期效果：删除视频后不再残留无关的分析文件和轨迹视频文件
+
+---
+
 ## 2026-05-13 10:51:00 (UTC+8)
 
 ### fix: delete_video_cascade 漏删 analyses 导致外键约束失败
