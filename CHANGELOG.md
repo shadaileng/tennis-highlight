@@ -1,5 +1,30 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 10:20:00 (UTC+8)
+
+### fix: ball.py 后台任务同步阻塞导致页面卡死
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/routers/ball.py` | 两个后台 `run()` 函数中 `analyze_ball_trajectory` 改为 `loop.run_in_executor` 异步执行，并传入 `progress_cb` 更新进度 |
+
+### 详细说明
+
+1. 之前的问题：`start_ball_analysis` 和 `start_ball_analysis_from_video` 的后台任务直接同步调用 `analyze_ball_trajectory`（CPU 密集型 YOLO 推理），**阻塞了主事件循环**
+   - 所有并发 API 请求（`GET /media`、`GET /analyses`、`GET /static/app.js` 等）被阻塞
+   - 前端轮询/刷新全部卡死，直到 45 秒后台任务完成
+   - `progress_cb=None` 导致数据库进度始终为 0%
+
+2. 修复：
+   - import `asyncio` 和 `update_analysis_progress_sync`
+   - 使用 `loop.run_in_executor(None, lambda: ...)` 将 CPU 密集型调用移出事件循环
+   - 提供 `progress_cb` 定期写入进度到数据库，前端 `pollBallAnalysis` 可读取到实时进度
+
+3. 效果：POST 返回后事件循环立即空闲，前端轮询/刷新正常进行，进度条实时更新
+
+---
+
 ## 2026-05-13 10:00:00 (UTC+8)
 
 ### fix: 点击 Start Analysis 后分析列表立即新增记录并实时更新进度

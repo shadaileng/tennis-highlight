@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -7,7 +8,14 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings
-from app.database import complete_analysis, create_analysis, get_analysis_run, get_video, update_analysis_status
+from app.database import (
+    complete_analysis,
+    create_analysis,
+    get_analysis_run,
+    get_video,
+    update_analysis_progress_sync,
+    update_analysis_status,
+)
 from app.pipeline.ball_tracking import (
     BALL_ALGORITHM,
     analyze_ball_trajectory,
@@ -47,14 +55,22 @@ async def start_ball_analysis(
             await update_analysis_status(ball_analysis_id, "analyzing")
             start_time = time.time()
             logger.info(f"[{ball_analysis_id}] Starting ball trajectory analysis...")
-            artifact_path, _, video_output_path = analyze_ball_trajectory(
-                analysis_id=ball_analysis_id,
-                video_path=video_path,
-                video_duration_s=analysis["duration_s"],
-                sample_fps=sample_fps,
-                range_start_s=analysis["range_start_s"] or 0,
-                range_end_s=analysis["range_end_s"] or analysis["duration_s"],
-                progress_cb=None,
+
+            def progress_cb(percent: float, message: str, eta_s: float | None = None) -> None:
+                update_analysis_progress_sync(ball_analysis_id, percent, message, eta_s)
+
+            loop = asyncio.get_running_loop()
+            artifact_path, _, video_output_path = await loop.run_in_executor(
+                None,
+                lambda: analyze_ball_trajectory(
+                    analysis_id=ball_analysis_id,
+                    video_path=video_path,
+                    video_duration_s=analysis["duration_s"],
+                    sample_fps=sample_fps,
+                    range_start_s=analysis["range_start_s"] or 0,
+                    range_end_s=analysis["range_end_s"] or analysis["duration_s"],
+                    progress_cb=progress_cb,
+                ),
             )
             elapsed = time.time() - start_time
             logger.info(f"[{ball_analysis_id}] Ball trajectory analysis completed in {elapsed:.2f}s")
@@ -154,14 +170,22 @@ async def start_ball_analysis_from_video(
             await update_analysis_status(ball_analysis_id, "analyzing")
             start_time = time.time()
             logger.info(f"[{ball_analysis_id}] Starting ball trajectory analysis...")
-            artifact_path, _, video_output_path = analyze_ball_trajectory(
-                analysis_id=ball_analysis_id,
-                video_path=video_path,
-                video_duration_s=duration,
-                sample_fps=30.0,  # 传入视频帧率用于 metadata，实际逐帧检测
-                range_start_s=range_start,
-                range_end_s=range_end,
-                progress_cb=None,
+
+            def progress_cb(percent: float, message: str, eta_s: float | None = None) -> None:
+                update_analysis_progress_sync(ball_analysis_id, percent, message, eta_s)
+
+            loop = asyncio.get_running_loop()
+            artifact_path, _, video_output_path = await loop.run_in_executor(
+                None,
+                lambda: analyze_ball_trajectory(
+                    analysis_id=ball_analysis_id,
+                    video_path=video_path,
+                    video_duration_s=duration,
+                    sample_fps=30.0,  # 传入视频帧率用于 metadata，实际逐帧检测
+                    range_start_s=range_start,
+                    range_end_s=range_end,
+                    progress_cb=progress_cb,
+                ),
             )
             elapsed = time.time() - start_time
             logger.info(f"[{ball_analysis_id}] Ball trajectory analysis completed in {elapsed:.2f}s")
