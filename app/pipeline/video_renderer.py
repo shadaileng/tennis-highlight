@@ -113,7 +113,7 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
     for ps in speed_events.get("player_speeds", []):
         duration_frames = max(int(1.0 * video_fps), 1)
         _player_speed_overlays.append({
-            "frame_start": ps["start_frame"],
+            "frame_start": max(0, ps["end_frame"] - duration_frames),
             "duration_frames": duration_frames,
             "speed_ms": ps["speed_ms"],
             "start_pos": ps.get("start_pos"),

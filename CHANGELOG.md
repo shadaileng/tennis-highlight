@@ -1,5 +1,22 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 11:20:00 (UTC+8)
+
+### fix: 跑动速度动画结束时刚好在 end_frame
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/video_renderer.py` | 将跑动速度 overlay 的 `frame_start` 从 `ps["start_frame"]` 改为 `max(0, ps["end_frame"] - duration_frames)`，使动画在 `end_frame` 结束 |
+
+### 详细说明
+
+1. 做了什么：修正跑动速度动画的帧范围，使动画结束帧与击球帧对齐
+2. 怎么做的：`_init_speed_overlays()` 中将 `frame_start` 设为 `max(0, end_frame - duration_frames)`，动画持续约1秒后刚好在 `end_frame` 消失
+3. 预期效果：跑动速度动画在击球帧上显示最后1帧后消失，视觉效果更自然
+
+---
+
 ## 2026-05-13 11:10:00 (UTC+8)
 
 ### refactor: 用网线分界法替代 foot_y 比较来确定球员身份
