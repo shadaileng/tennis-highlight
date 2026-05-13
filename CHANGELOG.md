@@ -1,5 +1,26 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 10:00:00 (UTC+8)
+
+### fix: 点击 Start Analysis 后分析列表立即新增记录并实时更新进度
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `static/app.js` | 修复 `renderAnalyses` 的 section 可见性逻辑、优化 `startAnalysis`/`startBallTrajectoryAnalysis` 即时追加 pending 记录、`pollBallAnalysis` 每次轮询更新 UI |
+
+### 详细说明
+
+1. 之前的问题：点击 Start Analysis 后分析列表不立即出现新记录，`pollBallAnalysis` 轮询时不更新进度条
+2. 修复了 4 个 bug：
+   - `renderAnalyses` 中 `analyses-section` 的 `hidden` 逻辑从 toggle 翻转改为 `!analyses.length`
+   - `startAnalysis` POST 成功后立即构造 pending 记录推入 `state.analyses` 并渲染
+   - `startBallTrajectoryAnalysis` 同上，立即追加 pending 记录
+   - `pollBallAnalysis` 每次轮询后调用 `renderAnalyses(analyses)` 更新进度
+3. 效果：点击后表格立即出现 "pending" 记录，2 秒后进度条和状态实时更新
+
+---
+
 ## 2026-05-13 09:50:00 (UTC+8)
 
 ### chore: 新增测试资源参数化规则 — 禁止硬编码文件路径

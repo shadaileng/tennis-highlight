@@ -171,8 +171,7 @@ function renderLibrary(videos) {
 function renderAnalyses(analyses) {
   const tbody = $("analyses-tbody");
   tbody.innerHTML = "";
-  // Don't show analyses section when in editor view
-  $("analyses-section").hidden = !$("analyses-section").hidden ? true : !analyses.length;
+  $("analyses-section").hidden = !analyses.length;
   for (const a of analyses) {
     const tr = document.createElement("tr");
     const fileTd = document.createElement("td");
@@ -333,7 +332,21 @@ async function startAnalysis(videoId) {
     alert("Could not start analysis: " + (await r.text()));
     return;
   }
-  await refreshLibrary();
+  const data = await r.json();
+  const mediaEntry = state.media.find((m) => m.video_id === videoId);
+  // Immediately add a pending entry so the list shows it without waiting
+  state.analyses.push({
+    analysis_id: data.analysis_id,
+    video_id: videoId,
+    filename: mediaEntry ? mediaEntry.filename : "Unknown",
+    algorithm,
+    status: "pending",
+    progress_percent: 0,
+    range_start_s: parseTime($("start-range-start").value) ?? 0,
+    range_end_s: parseTime($("start-range-end").value) ?? (mediaEntry ? mediaEntry.duration_s : 0),
+    duration_s: mediaEntry ? mediaEntry.duration_s : 0,
+  });
+  renderAnalyses(state.analyses);
   pollAnalyses();
 }
 
@@ -365,6 +378,20 @@ async function startBallTrajectoryAnalysis(videoId) {
     // Store the video ID for later use
     sessionStorage.setItem("pendingBallAnalysisId", data.ball_analysis_id);
     
+    // Immediately add a pending entry for the ball trajectory analysis
+    state.analyses.push({
+      analysis_id: data.ball_analysis_id,
+      video_id: videoId,
+      filename: media ? media.filename : "Unknown",
+      algorithm: "ball_tracking_yolo",
+      status: "pending",
+      progress_percent: 0,
+      range_start_s: rangeStart,
+      range_end_s: rangeEnd,
+      duration_s: media ? media.duration_s : 0,
+    });
+    renderAnalyses(state.analyses);
+    
     await refreshLibrary();
     pollBallAnalysis(data.ball_analysis_id, videoId);
   } catch (e) {
@@ -375,6 +402,8 @@ async function startBallTrajectoryAnalysis(videoId) {
 async function pollBallAnalysis(ballAnalysisId, videoId) {
   while (true) {
     const analyses = await fetch("/analyses").then(r => r.json());
+    state.analyses = analyses;
+    renderAnalyses(analyses);
     const ball = analyses.find(a => a.analysis_id === ballAnalysisId);
     
     if (ball) {
