@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 15:25:00 (UTC+8)
+
+### fix: 修复球速归属错误 — `ball_mini_coords` 索引与帧数不匹配
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/mini_court.py` | `convert_bounding_boxes_to_mini_court_coordinates` 中 `output_ball_boxes` 的 append 移出球员内层循环，改为每帧只 append 一次 |
+
+### 详细说明
+
+1. 问题：`convert_bounding_boxes_to_mini_court_coordinates` 中球坐标 `output_ball_boxes.append` 位于球员循环（for player_id）内部，每帧有 2 名球员就 append 2 次。导致 `ball_mini_coords` 长度 = 2×帧数，索引与帧完全不匹配。`_calculate_speed_events` 访问 `ball_mini_coords[start_frame]` 时拿到的是错误帧/错误球员的数据，导致击球球员归属错乱（近端球员击球却被归类为远端球员）。
+
+2. 修复：将球坐标 append 移到球员循环外部，使用临时变量 `ball_mini_pos_for_frame` 在球员循环中计算一次，循环结束后每帧只 append 一次。`ball_mini_coords` 现在长度 = 帧数，索引与帧正确对齐。
+
+3. 测试验证：运行 `test_ball_speed_assignment.py`，错误归属从 2/4 降为 0/4（frame=54 为远端球员击球，渲染器正确跳过）。speed 值更正：frame=8: 61.7→11.8, frame=94: 65.5→17.4 m/s。
+
+---
+
 ## 2026-05-13 12:10:00 (UTC+8)
 
 ### feat: 击球/球速/跑动速度分配球员归属，渲染时仅显示近端球员

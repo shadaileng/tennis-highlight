@@ -164,6 +164,8 @@ class MiniCourt:
                     )
 
             output_player_bboxes_dict = {}
+            # 缓存本帧球的 mini-court 坐标（仅在球员循环中计算一次）
+            ball_mini_pos_for_frame = None
             for player_id, bbox in player_bbox.items():
                 foot_position = self._get_foot_position(bbox)
 
@@ -191,7 +193,7 @@ class MiniCourt:
                 )
                 output_player_bboxes_dict[player_id] = mini_pos
 
-                # 球映射（仅对离球最近的球员进行）
+                # 球映射（仅对离球最近的球员计算一次，暂存到变量中）
                 if (
                     closest_player_id_to_ball == player_id
                     and ball_center is not None
@@ -205,13 +207,16 @@ class MiniCourt:
                         original_court_key_points[ball_kp_index * 2],
                         original_court_key_points[ball_kp_index * 2 + 1],
                     )
-                    mini_ball_pos = self._get_mini_court_coordinates(
+                    ball_mini_pos_for_frame = self._get_mini_court_coordinates(
                         ball_center, ball_kp, ball_kp_index,
                         max_height_px, player_heights.get(player_id, 1.88),
                     )
-                    output_ball_boxes.append({1: mini_ball_pos})
-                else:
-                    output_ball_boxes.append({1: (0, 0)} if frame_num < len(output_ball_boxes) else {})
+
+            # 每帧只 append 一次球坐标（修复：球坐标条目数与帧数一致）
+            if ball_mini_pos_for_frame is not None:
+                output_ball_boxes.append({1: ball_mini_pos_for_frame})
+            else:
+                output_ball_boxes.append({1: (0, 0)} if frame_num < len(output_player_boxes) else {})
 
             if not output_player_bboxes_dict:
                 output_player_boxes.append({})
