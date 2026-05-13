@@ -111,6 +111,7 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
             "duration_frames": duration_frames,
             "speed_ms": bs["speed_ms"],
             "ball_pos": bs.get("ball_pos"),
+            "player_bbox": bs.get("player_bbox", []),
             "player_id": bs.get("hitter_id"),
         })
 
@@ -195,7 +196,7 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
             cv2.circle(frame, current_end, 5, (0, 255, 255), -1)
             cv2.circle(frame, current_end, 8, (255, 255, 255), 2)
 
-        speed_text = f"{overlay['speed_ms']} m/s"
+        speed_text = f"P{overlay['player_id']} {overlay['speed_ms']} m/s"
         # 文字背景
         (tw, th), _ = cv2.getTextSize(speed_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         text_x = mid_x - tw // 2
@@ -236,7 +237,7 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
         text_x = bx + 15
         text_y = by - 15
 
-        speed_text = f"{overlay['speed_ms']} m/s"
+        speed_text = f"P{overlay['player_id']} {overlay['speed_ms']} m/s"
         color_intensity = int(255 * alpha)
         color = (0, color_intensity, color_intensity)  # 青色渐淡
 
