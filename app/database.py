@@ -419,6 +419,7 @@ async def delete_video_cascade(video_id: str) -> dict:
             ).fetchall()
             exports = [r["output_filepath"] for r in export_rows]
             conn.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
+            conn.execute("DELETE FROM analyses WHERE video_id = ?", (video_id,))
             conn.execute("DELETE FROM exports WHERE video_id = ?", (video_id,))
             conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
             conn.commit()

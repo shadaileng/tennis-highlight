@@ -1,5 +1,22 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 10:51:00 (UTC+8)
+
+### fix: delete_video_cascade 漏删 analyses 导致外键约束失败
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/database.py` | `delete_video_cascade` 中删除 videos 前增加 `DELETE FROM analyses` |
+
+### 详细说明
+
+1. 做了什么：`DELETE /videos/{id}` 时因 `analyses` 表仍有外键引用 videos 记录，报 `FOREIGN KEY constraint failed`
+2. 怎么做的：在 `delete_video_cascade` 的 `_q()` 中先删 `segments`，再删 `analyses`，再删 `exports`，最后删 `videos`
+3. 预期效果：删除视频时，所有关联的分析记录也被清除，不再报外键错误
+
+---
+
 ## 2026-05-13 10:45:00 (UTC+8)
 
 ### fix: 启动脚本端口被占用时无法正确停止旧进程
