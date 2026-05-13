@@ -99,14 +99,14 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
     if not speed_events:
         return
 
-    # 球速显示：击球后在击球球员右上方显示约 0.8 秒
+    # 球速显示：击球后击球位置右上方显示约 0.8 秒
     for bs in speed_events.get("ball_speeds", []):
         duration_frames = max(int(0.8 * video_fps), 1)
         _ball_speed_overlays.append({
             "frame_start": bs["frame_idx"],
             "duration_frames": duration_frames,
             "speed_ms": bs["speed_ms"],
-            "player_bbox": bs.get("player_bbox", []),
+            "ball_pos": bs.get("ball_pos"),
         })
 
     # 跑动速度：在击球间隔内画连线，显示约 1.0 秒
@@ -207,7 +207,7 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
         )
 
-    # 绘制击球球速文本（在球员右上方显示）
+    # 绘制击球球速文本（在击球位置右上方显示）
     for overlay in _ball_speed_overlays:
         age = current_frame_idx - overlay["frame_start"]
         if age < 0 or age > overlay["duration_frames"]:
@@ -218,15 +218,15 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
         if alpha <= 0:
             continue
 
-        bbox = overlay.get("player_bbox", [])
-        if not bbox or len(bbox) < 4:
+        ball_pos = overlay.get("ball_pos")
+        if not ball_pos or len(ball_pos) < 2:
             continue
 
-        x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+        bx, by = int(ball_pos[0]), int(ball_pos[1])
 
-        # 显示在击球球员右上方
-        text_x = x2 + 10
-        text_y = y1 - 10
+        # 显示在击球位置右上方
+        text_x = bx + 15
+        text_y = by - 15
 
         speed_text = f"{overlay['speed_ms']} m/s"
         color_intensity = int(255 * alpha)

@@ -414,6 +414,7 @@ def _calculate_speed_events(
                         "speed_ms": round(ball_speed_ms, 1),
                         "hitter_id": hitter_id,
                         "player_bbox": hitter_bbox,
+                        "ball_pos": list(hit_moments[i].get("ball_pos", (0, 0))),
                     })
 
                 # 跑动速度：仅计算靠近镜头球员的跑动
