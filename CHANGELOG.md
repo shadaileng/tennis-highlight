@@ -1,5 +1,26 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 10:40:00 (UTC+8)
+
+### fix: orchestrator.py lambda 闭包无法被 pickle 导致 ProcessPoolExecutor 报错
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/orchestrator.py` | 将 3 处 `lambda` 闭包替换为可 pickle 的 `functools.partial` + 模块级别函数 |
+
+### 详细说明
+
+1. 做了什么：将 `run_analysis` 中所有匿名 lambda 闭包替换为模块级别的可 pickle 函数，解决 `ProcessPoolExecutor` pickling 失败问题
+2. 怎么做的：
+   - 新增模块级别函数 `_progress_cb`（3 参数+ETA）和 `_progress_cb_no_eta`（2 参数，用于 motion_analysis）
+   - 删除局部嵌套函数 `progress_cb`
+   - 将 `lambda: f(...)` 改为 `partial(f, ..., partial(_progress_cb, analysis_id), ...)`
+   - 导入 `functools.partial`
+3. 预期效果：后台上传分析使用 `ProcessPoolExecutor` 时不再报 `Can't pickle local object` 错误
+
+---
+
 ## 2026-05-13 10:20:00 (UTC+8)
 
 ### fix: ball.py 后台任务同步阻塞导致页面卡死

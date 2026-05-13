@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 
 from app.config import settings
@@ -43,6 +44,16 @@ def _get_process_pool() -> ProcessPoolExecutor:
     return _process_pool
 
 
+def _progress_cb(analysis_id: str, percent: float, message: str, eta_s: float | None = None) -> None:
+    """模块级别的回调函数（可 pickle），通过 analysis_id 写入进度到数据库。"""
+    update_analysis_progress_sync(analysis_id, percent, message, eta_s)
+
+
+def _progress_cb_no_eta(analysis_id: str, percent: float, message: str) -> None:
+    """适配 motion_analysis 的 2 参数回调（ProgressCallback = Callable[[float, str], None]）。"""
+    update_analysis_progress_sync(analysis_id, percent, message, None)
+
+
 async def run_analysis(analysis_id: str) -> None:
     """Background task: analyze a video for in-play segments and store them.
     
@@ -64,9 +75,6 @@ async def run_analysis(analysis_id: str) -> None:
             analysis_id, video_id, video_path.name, duration,
         )
 
-        def progress_cb(percent: float, message: str, eta_s: float | None = None) -> None:
-            update_analysis_progress_sync(analysis_id, percent, message, eta_s)
-
         try:
             knobs = normalize_knobs(json.loads(analysis["instant_knobs_json"]), default_knobs())
         except Exception:
@@ -79,14 +87,15 @@ async def run_analysis(analysis_id: str) -> None:
             loop = asyncio.get_running_loop()
             artifact_path, timeline, analysis_result = await loop.run_in_executor(
                 _get_process_pool(),
-                lambda: analyze_pose_to_artifact(
+                partial(
+                    analyze_pose_to_artifact,
                     analysis_id,
                     video_path,
                     duration,
                     float(knobs["sample_fps"]),
                     float(analysis["range_start_s"] or 0.0),
                     float(analysis["range_end_s"] or duration),
-                    progress_cb,
+                    partial(_progress_cb, analysis_id),
                     str(config.get("pose_model", "yolo11n-pose.pt")),
                     float(config.get("pose_conf", 0.25)),
                     int(config.get("pose_imgsz", 640)),
@@ -98,14 +107,15 @@ async def run_analysis(analysis_id: str) -> None:
             loop = asyncio.get_running_loop()
             artifact_path, artifact, video_output_path = await loop.run_in_executor(
                 _get_process_pool(),
-                lambda: analyze_ball_trajectory(
+                partial(
+                    analyze_ball_trajectory,
                     analysis_id,
                     video_path,
                     duration,
                     float(knobs.get("sample_fps", 4.0)),
                     float(analysis["range_start_s"] or 0.0),
                     float(analysis["range_end_s"] or duration),
-                    progress_cb,
+                    partial(_progress_cb, analysis_id),
                 ),
             )
             # Ball analysis doesn't produce segments, create a default full-video segment
@@ -144,11 +154,12 @@ async def run_analysis(analysis_id: str) -> None:
             loop = asyncio.get_running_loop()
             artifact_path, timeline, analysis_result = await loop.run_in_executor(
                 _get_process_pool(),
-                lambda: analyze_video_to_artifact(
+                partial(
+                    analyze_video_to_artifact,
                     analysis_id,
                     video_path,
                     duration,
-                    lambda pct, msg: progress_cb(pct, msg, None),
+                    partial(_progress_cb_no_eta, analysis_id),
                     knobs,
                     analysis["algorithm"],
                     court_calibration,
