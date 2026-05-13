@@ -1,5 +1,22 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 11:03:00 (UTC+8)
+
+### fix: ball_tracking_yolo 类型点击 Open 播放渲染视频
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `static/app.js` | `openAnalysis`: 检测 ball_tracking_yolo 时设置 `ballAnalysisId`；`loadEditor`: 使用渲染视频 URL 替代原始视频 |
+
+### 详细说明
+
+1. `openAnalysis` 中判断 `a.algorithm === "ball_tracking_yolo"` 时标记 `state.ballAnalysisId`
+2. `loadEditor` 对有 `ballAnalysisId` 的分析，设置 videoUrl 为 `/analysis/{id}/ball-video`（渲染轨迹+球速的视频）
+3. 非 ball_tracking_yolo 类型行为不变，仍使用原始视频
+
+---
+
 ## 2026-05-13 11:02:00 (UTC+8)
 
 ### fix: 球速/跑动速度改为 m/s，仅计算靠近镜头一侧球员

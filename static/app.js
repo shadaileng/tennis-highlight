@@ -850,6 +850,14 @@ async function openAnalysis(a) {
   state.analysisId = a.analysis_id;
   state.duration = a.duration_s || 0;
   $("editor-title").textContent = `${a.filename} • ${a.algorithm}`;
+
+  // For ball_tracking_yolo analysis, use the rendered video (with trajectory + speed overlays)
+  if (a.algorithm === "ball_tracking_yolo") {
+    state.ballAnalysisId = a.analysis_id;
+  } else {
+    state.ballAnalysisId = null;
+  }
+
   await loadEditor();
 }
 
@@ -861,14 +869,23 @@ $("back-to-library-btn").addEventListener("click", async () => {
 async function loadEditor() {
   $("analyses-section").hidden = true;
   state.pollingAnalyses = false;  // Stop any ongoing analysis polling
-  const [segR, urlR, analysisR] = await Promise.all([
+
+  // For ball_tracking_yolo, use the rendered ball trajectory video instead of original
+  let videoUrl;
+  if (state.ballAnalysisId) {
+    videoUrl = `/analysis/${state.ballAnalysisId}/ball-video`;
+  } else {
+    const urlR = await fetch(`/video-file/${state.videoId}`).then((r) => r.json());
+    videoUrl = urlR.url;
+  }
+
+  const [segR, analysisR] = await Promise.all([
     fetch(`/analysis-segments/${state.analysisId}`).then((r) => r.json()),
-    fetch(`/video-file/${state.videoId}`).then((r) => r.json()),
     fetch(`/analysis/${state.analysisId}`).then((r) => r.ok ? r.json() : null),
   ]);
   state.duration = segR.duration_s;
   state.segments = segR.segments.map((s) => ({ ...s }));
-  state.videoUrl = urlR.url;
+  state.videoUrl = videoUrl;
   state.analysis = analysisR;
   state.poseData = null;
   if (analysisR && analysisR.metadata && analysisR.metadata.detector === "pose_skeleton_yolo") {
