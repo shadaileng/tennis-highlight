@@ -417,14 +417,7 @@ def _calculate_speed_events(
 
             # 判断击球球员
             player_positions = player_mini_coords[start_frame] if start_frame < len(player_mini_coords) else {}
-            hitter_id = None
-            if player_positions:
-                hitter_id = min(
-                    player_positions.keys(),
-                    key=lambda pid: _measure_distance(
-                        player_positions[pid], ball_start
-                    ),
-                )
+            hitter_id = _find_hitter_id(player_positions, ball_start)
 
             hitter_bbox = []
             if start_frame < len(player_detections) and hitter_id and hitter_id in player_detections[start_frame]:
@@ -466,6 +459,36 @@ def _calculate_speed_events(
                         "end_pos": end_foot_pos,
                     })
 
+    # 处理最后一个击球时刻（没有后续击球帧，使用击球前几帧的球速估算）
+    if len(hit_frames) >= 2:
+        last_frame = hit_frames[-1]
+        lookback_frames = min(5, last_frame - hit_frames[-2])  # 回看最多5帧或前一次击球
+        prev_frame = max(0, last_frame - lookback_frames)
+
+        ball_cur = ball_mini_coords[last_frame].get(1) if last_frame < len(ball_mini_coords) else None
+        ball_prev = ball_mini_coords[prev_frame].get(1) if prev_frame < len(ball_mini_coords) else None
+
+        if ball_cur and ball_prev and last_frame != prev_frame:
+            dist_px = _measure_distance(ball_cur, ball_prev)
+            dist_m = (dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
+            duration_s = (last_frame - prev_frame) / video_fps
+            ball_speed_ms = dist_m / duration_s
+
+            player_positions = player_mini_coords[last_frame] if last_frame < len(player_mini_coords) else {}
+            hitter_id = _find_hitter_id(player_positions, ball_cur)
+
+            hitter_bbox = []
+            if last_frame < len(player_detections) and hitter_id and hitter_id in player_detections[last_frame]:
+                hitter_bbox = player_detections[last_frame][hitter_id]
+
+            ball_speeds.append({
+                "frame_idx": last_frame,
+                "speed_ms": round(ball_speed_ms, 1),
+                "hitter_id": hitter_id,
+                "player_bbox": hitter_bbox,
+                "ball_pos": list(hit_moments[-1].get("ball_pos", (0, 0))),
+            })
+
     logger.info(
         f"Speed calculation (near={near_player_id}, far={far_player_id}): "
         f"{len(ball_speeds)} ball speed events, "
@@ -476,6 +499,16 @@ def _calculate_speed_events(
         "ball_speeds": ball_speeds,
         "player_speeds": player_speeds,
     }
+
+
+def _find_hitter_id(player_positions: dict, ball_pos: tuple) -> int | None:
+    """在小场地坐标中找到离球最近的球员"""
+    if not player_positions:
+        return None
+    return min(
+        player_positions.keys(),
+        key=lambda pid: _measure_distance(player_positions[pid], ball_pos),
+    )
 
 
 def _assign_player_ids_by_court_side(

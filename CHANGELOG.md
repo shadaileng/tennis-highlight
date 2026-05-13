@@ -1,5 +1,28 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 16:30:00 (UTC+8)
+
+### feat: 为最后一个击球时刻补充球速计算，所有 5 次击球均正确显示
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | `_calculate_speed_events` 中添加最后一个 hit_moment 的球速计算（使用击球前几帧球位移） |
+| `app/pipeline/ball_tracking.py` | 新增 `_find_hitter_id` 辅助函数，复用 hitter 查找逻辑 |
+
+### 详细说明
+
+1. 问题：`_calculate_speed_events` 遍历 `range(len(hit_frames)-1)`，导致最后一个击球时刻无法计算球速（无后续击球）。用户反馈第 5 次击球没有球速显示。
+2. 修复：循环结束后，对最后一个 hit_moment 使用回看法——取击球帧前 N 帧（最多 5 帧或到前一次击球）的球位移 / 时间差计算速度。新增 `_find_hitter_id` 封装最小距离匹配逻辑。
+3. 验证：ball_speeds 从 4→5，所有 5 个 ball_speed 在渲染视频中正确显示/隐藏：
+   - frame=8 ✅ P2 11.8m/s
+   - frame=54 ✅ P4 已过滤隐藏
+   - frame=94 ✅ P2 17.4m/s
+   - frame=135 ✅ P2 13.1m/s
+   - frame=180 ✅ P2 3.5m/s
+
+---
+
 ## 2026-05-13 15:25:00 (UTC+8)
 
 ### fix: 修复球速归属错误 — `ball_mini_coords` 索引与帧数不匹配
