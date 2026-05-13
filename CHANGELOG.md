@@ -1,5 +1,23 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 12:10:00 (UTC+8)
+
+### feat: 击球/球速/跑动速度分配球员归属，渲染时仅显示近端球员
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | `_calculate_speed_events()` 返回 `near_player_id`；为每个 hit_moment 分配 `player_id`；计算所有球员的球速和跑动速度（不再过滤近端） |
+| `app/pipeline/video_renderer.py` | `_init_speed_overlays()` 读取 `near_player_id`，仅初始化近端球员的球速和跑动速度 |
+
+### 详细说明
+
+1. 做了什么：球员身份按球网划分后，检测时计算所有球员的数据并分配归属，渲染时只显示近端球员的球速和跑动速度
+2. 怎么做的：`_calculate_speed_events()` 新增返回 `near_player_id`，为每个 hit_moment 分配 `player_id`，球速/跑动速度不再做近端过滤；`_init_speed_overlays()` 通过 `near_player_id` 过滤后只初始化近端球员的叠加数据
+3. 预期效果：后端数据完整（含所有球员数据），渲染视频只展示近端球员的球速和跑动速度
+
+---
+
 ## 2026-05-13 11:20:00 (UTC+8)
 
 ### fix: 跑动速度动画结束时刚好在 end_frame

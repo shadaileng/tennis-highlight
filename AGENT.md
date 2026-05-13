@@ -99,6 +99,7 @@ hit_moments: list[dict] = [
         "time_s": float,          # 击球时刻（秒）
         "ball_pos": (float, float),  # 球中心坐标 (x, y)
         "detection_method": str,  # "trajectory_analysis" | "racket_detection"
+        "player_id": int | None,  # 击球球员的 track_id（由 _calculate_speed_events 分配）
     },
     ...
 ]
@@ -130,6 +131,7 @@ artifact = {
     "court_keypoints": [28个float],  # 14个场地关键点坐标 (x0,y0,x1,y1,...)
     "player_detections": [{track_id: [x1,y1,x2,y2]}, ...],  # 过滤后的2名球员检测框
     "speed_events": {  # 速度事件
+        "near_player_id": int | None,  # 靠近镜头球员的 track_id
         "ball_speeds": [
             {
                 "frame_idx": int,        # 击球帧
@@ -157,8 +159,9 @@ artifact = {
 参考 Tennis_AI_mainland 的算法：
 1. **小场地映射**：通过 `court_line_detector`（ResNet50）检测场地 14 关键点，再用 `mini_court` 将球员和球映射到小场地坐标系
 2. **靠近镜头球员确定**：优先使用**网线分界法**（`_assign_player_ids_by_court_side`），基于关键点 12/13（网柱）的 y 均值作为网线，foot_y > net_y 为近端球员。回退到 foot_y 比较（`_find_near_side_player`）。
-3. **球速**：相邻击球帧间球在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 → m/s。仅当靠近镜头的球员是击球者时才记录。
-4. **跑动速度**：相邻击球帧间靠近镜头球员在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 → m/s。仅当靠近镜头的球员是非击球者（对手）时才记录。
+3. **球速**：相邻击球帧间球在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 → m/s。计算所有击球事件（不限球员），数据含 `hitter_id` 标识击球球员。
+4. **跑动速度**：相邻击球帧间球员在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 → m/s。计算所有球员在击球间隔内的移动速度，数据含 `player_id` 标识球员。
+5. **渲染过滤**：`_init_speed_overlays()` 通过 `near_player_id` 过滤，仅初始化近端球员的球速文本和跑动连线。
 5. **小场地比例尺**：用 `DOUBLE_LINE_WIDTH`（10.97m）对标小场地绘制宽度
 
 ### 视频渲染器函数签名

@@ -342,7 +342,7 @@ def _calculate_speed_events(
     court_keypoints: list[float] | None = None,
 ) -> dict:
     """
-    计算球速和球员跑动速度（仅靠近镜头一侧的球员）
+    计算球速和球员跑动速度（所有球员）
 
     算法: 相邻击球帧之间，计算球/球员在小场地上的位移 → 米 / 时间 → m/s
     参考 Tennis_AI_mainland/tennis_analysis/main.py
@@ -361,22 +361,37 @@ def _calculate_speed_events(
 
     Returns:
         {
-            "ball_speeds": [{frame_idx, speed_ms, player_bbox}, ...],
-            "player_speeds": [{start_frame, end_frame, speed_ms, start_pos, end_pos}, ...]
+            "near_player_id": int | None,         # 靠近镜头球员的 track_id
+            "ball_speeds": [{frame_idx, speed_ms, hitter_id, player_bbox, ball_pos}, ...],
+            "player_speeds": [{start_frame, end_frame, speed_ms, player_id, start_pos, end_pos}, ...]
         }
     """
     from app.pipeline.mini_court import DOUBLE_LINE_WIDTH
 
     # 确定靠近镜头一侧的球员：优先用网线分界，回退到 foot y 比较
     near_player_id = None
+    far_player_id = None
     if court_keypoints:
         player_side_ids = _assign_player_ids_by_court_side(court_keypoints, player_detections)
         near_player_id = player_side_ids.get("near")
+        far_player_id = player_side_ids.get("far")
     if near_player_id is None:
         near_player_id = _find_near_side_player(player_detections)
     if near_player_id is None:
         logger.warning("Could not determine near-side player, skipping speed calculation")
-        return {"ball_speeds": [], "player_speeds": []}
+        return {"near_player_id": None, "ball_speeds": [], "player_speeds": []}
+
+    # --- 为每个 hit_moment 分配 player_id（小场地上离球最近的球员） ---
+    for hit in hit_moments:
+        f_idx = hit["frame_idx"]
+        if f_idx < len(ball_mini_coords):
+            ball_m = ball_mini_coords[f_idx].get(1)
+            p_positions = player_mini_coords[f_idx] if f_idx < len(player_mini_coords) else {}
+            if ball_m is not None and p_positions:
+                hit["player_id"] = min(
+                    p_positions.keys(),
+                    key=lambda pid: _measure_distance(p_positions[pid], ball_m),
+                )
 
     ball_speeds = []
     player_speeds = []
@@ -391,7 +406,7 @@ def _calculate_speed_events(
         if duration_s <= 0:
             continue
 
-        # 球速：相邻击球帧间球位移 → m/s
+        # 球速：相邻击球帧间球位移 → m/s（记录所有球员的击球）
         ball_start = ball_mini_coords[start_frame].get(1) if start_frame < len(ball_mini_coords) else None
         ball_end = ball_mini_coords[end_frame].get(1) if end_frame < len(ball_mini_coords) else None
 
@@ -411,58 +426,53 @@ def _calculate_speed_events(
                     ),
                 )
 
-                # 仅记录靠近镜头球员的球速
-                if hitter_id == near_player_id:
-                    hitter_bbox = []
-                    if start_frame < len(player_detections) and hitter_id in player_detections[start_frame]:
-                        hitter_bbox = player_detections[start_frame][hitter_id]
+            hitter_bbox = []
+            if start_frame < len(player_detections) and hitter_id and hitter_id in player_detections[start_frame]:
+                hitter_bbox = player_detections[start_frame][hitter_id]
 
-                    ball_speeds.append({
-                        "frame_idx": start_frame,
-                        "speed_ms": round(ball_speed_ms, 1),
-                        "hitter_id": hitter_id,
-                        "player_bbox": hitter_bbox,
-                        "ball_pos": list(hit_moments[i].get("ball_pos", (0, 0))),
+            ball_speeds.append({
+                "frame_idx": start_frame,
+                "speed_ms": round(ball_speed_ms, 1),
+                "hitter_id": hitter_id,
+                "player_bbox": hitter_bbox,
+                "ball_pos": list(hit_moments[i].get("ball_pos", (0, 0))),
+            })
+
+            # 跑动速度：计算所有球员在击球间隔内的移动速度
+            for pid in list(player_positions.keys()):
+                p_start = player_mini_coords[start_frame].get(pid) if start_frame < len(player_mini_coords) else None
+                p_end = player_mini_coords[end_frame].get(pid) if end_frame < len(player_mini_coords) else None
+
+                if p_start and p_end:
+                    p_dist_px = _measure_distance(p_start, p_end)
+                    p_dist_m = (p_dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
+                    p_speed_ms = p_dist_m / duration_s
+
+                    start_foot_pos = None
+                    end_foot_pos = None
+                    if start_frame < len(player_detections) and pid in player_detections[start_frame]:
+                        bbox = player_detections[start_frame][pid]
+                        start_foot_pos = ((bbox[0] + bbox[2]) / 2, bbox[3])
+                    if end_frame < len(player_detections) and pid in player_detections[end_frame]:
+                        bbox = player_detections[end_frame][pid]
+                        end_foot_pos = ((bbox[0] + bbox[2]) / 2, bbox[3])
+
+                    player_speeds.append({
+                        "start_frame": start_frame,
+                        "end_frame": end_frame,
+                        "speed_ms": round(p_speed_ms, 1),
+                        "player_id": pid,
+                        "start_pos": start_foot_pos,
+                        "end_pos": end_foot_pos,
                     })
 
-                # 跑动速度：仅计算靠近镜头球员的跑动
-                opponent_id = next(
-                    (pid for pid in player_positions if pid != hitter_id),
-                    None,
-                )
-                if opponent_id is not None and opponent_id == near_player_id:
-                    opp_start = player_mini_coords[start_frame].get(opponent_id)
-                    opp_end = player_mini_coords[end_frame].get(opponent_id) if end_frame < len(player_mini_coords) else None
-
-                    if opp_start and opp_end:
-                        opp_dist_px = _measure_distance(opp_start, opp_end)
-                        opp_dist_m = (opp_dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
-                        opp_speed_ms = opp_dist_m / duration_s
-
-                        start_foot_pos = None
-                        end_foot_pos = None
-                        if start_frame < len(player_detections) and opponent_id in player_detections[start_frame]:
-                            bbox = player_detections[start_frame][opponent_id]
-                            start_foot_pos = ((bbox[0] + bbox[2]) / 2, bbox[3])
-                        if end_frame < len(player_detections) and opponent_id in player_detections[end_frame]:
-                            bbox = player_detections[end_frame][opponent_id]
-                            end_foot_pos = ((bbox[0] + bbox[2]) / 2, bbox[3])
-
-                        player_speeds.append({
-                            "start_frame": start_frame,
-                            "end_frame": end_frame,
-                            "speed_ms": round(opp_speed_ms, 1),
-                            "player_id": opponent_id,
-                            "start_pos": start_foot_pos,
-                            "end_pos": end_foot_pos,
-                        })
-
     logger.info(
-        f"Speed calculation (near-side player {near_player_id}): "
+        f"Speed calculation (near={near_player_id}, far={far_player_id}): "
         f"{len(ball_speeds)} ball speed events, "
         f"{len(player_speeds)} player speed events"
     )
     return {
+        "near_player_id": near_player_id,
         "ball_speeds": ball_speeds,
         "player_speeds": player_speeds,
     }

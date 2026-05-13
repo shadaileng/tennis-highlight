@@ -91,7 +91,7 @@ def _init_sparks(hit_moments: list[dict], video_fps: float):
 
 
 def _init_speed_overlays(speed_events: dict | None, video_fps: float):
-    """初始化球速和跑动速度叠加系统"""
+    """初始化球速和跑动速度叠加系统（仅初始化近端球员的数据）"""
     global _ball_speed_overlays, _player_speed_overlays
     _ball_speed_overlays = []
     _player_speed_overlays = []
@@ -99,18 +99,25 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
     if not speed_events:
         return
 
-    # 球速显示：击球后击球位置右上方显示约 0.8 秒
+    near_player_id = speed_events.get("near_player_id")
+
+    # 球速显示：击球后击球位置右上方显示约 0.8 秒（仅近端球员）
     for bs in speed_events.get("ball_speeds", []):
+        if near_player_id is not None and bs.get("hitter_id") != near_player_id:
+            continue
         duration_frames = max(int(0.8 * video_fps), 1)
         _ball_speed_overlays.append({
             "frame_start": bs["frame_idx"],
             "duration_frames": duration_frames,
             "speed_ms": bs["speed_ms"],
             "ball_pos": bs.get("ball_pos"),
+            "player_id": bs.get("hitter_id"),
         })
 
-    # 跑动速度：在击球间隔内画连线，显示约 1.0 秒
+    # 跑动速度：在击球间隔内画连线，显示约 1.0 秒（仅近端球员）
     for ps in speed_events.get("player_speeds", []):
+        if near_player_id is not None and ps.get("player_id") != near_player_id:
+            continue
         duration_frames = max(int(1.0 * video_fps), 1)
         _player_speed_overlays.append({
             "frame_start": max(0, ps["end_frame"] - duration_frames),
@@ -118,10 +125,11 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
             "speed_ms": ps["speed_ms"],
             "start_pos": ps.get("start_pos"),
             "end_pos": ps.get("end_pos"),
+            "player_id": ps.get("player_id"),
         })
 
     logger.info(
-        f"Initialized {len(_ball_speed_overlays)} ball speed overlays, "
+        f"Initialized {len(_ball_speed_overlays)} ball speed overlays (near player {near_player_id}), "
         f"{len(_player_speed_overlays)} player speed overlays"
     )
 
