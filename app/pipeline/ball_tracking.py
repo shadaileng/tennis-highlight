@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[float, str, float | None], None]
 
 BALL_ALGORITHM = "ball_tracking_yolo"
-BALL_ARTIFACT_VERSION = 5  # 增加 artifact 版本：新增批量推理
+BALL_ARTIFACT_VERSION = 6  # 增加 artifact 版本：新增球员检测与球速/跑动速度
 
 # 帧跳跃检测参数（CPU 环境：每 N 帧检测一帧，其余帧通过插值补全）
 DETECTION_STEP = 3  # 每 3 帧检测 1 帧，~3x 加速，由 _interpolate_ball_positions 补全
@@ -332,6 +332,129 @@ def _convert_to_hit_moments(ball_detections: list[dict[int, list[float]]],
     return hit_moments
 
 
+def _calculate_speed_events(
+    hit_moments: list[dict],
+    player_detections: list[dict[int, list[float]]],
+    ball_mini_coords: list[dict[int, tuple]],
+    player_mini_coords: list[dict[int, tuple]],
+    video_fps: float,
+    mini_court_width: int,
+) -> dict:
+    """
+    计算球速和球员跑动速度
+
+    算法: 相邻击球帧之间，计算球在小场地上的位移 → 米 → km/h
+    参考 Tennis_AI_mainland/tennis_analysis/main.py
+
+    Args:
+        hit_moments: 击球时刻列表 [{"frame_idx": int, ...}]
+        player_detections: 逐帧球员检测框 (原始像素坐标)
+        ball_mini_coords: 逐帧球在小场地上的坐标
+        player_mini_coords: 逐帧球员在小场地上的坐标
+        video_fps: 视频帧率
+        mini_court_width: 小场地绘制宽度（像素）
+
+    Returns:
+        {
+            "ball_speeds": [{frame_idx, speed_kmh, player_bbox}, ...],
+            "player_speeds": [{start_frame, end_frame, speed_kmh, start_pos, end_pos}, ...]
+        }
+    """
+    from app.pipeline.mini_court import DOUBLE_LINE_WIDTH
+
+    ball_speeds = []
+    player_speeds = []
+
+    hit_frames = [h["frame_idx"] for h in hit_moments]
+
+    for i in range(len(hit_frames) - 1):
+        start_frame = hit_frames[i]
+        end_frame = hit_frames[i + 1]
+        duration_s = (end_frame - start_frame) / video_fps
+
+        if duration_s <= 0:
+            continue
+
+        # 球速：相邻击球帧间球位移
+        ball_start = ball_mini_coords[start_frame].get(1) if start_frame < len(ball_mini_coords) else None
+        ball_end = ball_mini_coords[end_frame].get(1) if end_frame < len(ball_mini_coords) else None
+
+        if ball_start and ball_end:
+            dist_px = _measure_distance(ball_start, ball_end)
+            dist_m = (dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
+            ball_speed_kmh = dist_m / duration_s * 3.6
+
+            # 判断击球球员：击球帧时谁离球最近
+            player_positions = player_mini_coords[start_frame] if start_frame < len(player_mini_coords) else {}
+            hitter_id = None
+            if player_positions:
+                hitter_id = min(
+                    player_positions.keys(),
+                    key=lambda pid: _measure_distance(
+                        player_positions[pid], ball_start
+                    ),
+                )
+
+                # 击球球员的原始边界框（用于渲染）
+                hitter_bbox = []
+                if start_frame < len(player_detections) and hitter_id in player_detections[start_frame]:
+                    hitter_bbox = player_detections[start_frame][hitter_id]
+
+                ball_speeds.append({
+                    "frame_idx": start_frame,
+                    "speed_kmh": round(ball_speed_kmh, 1),
+                    "hitter_id": hitter_id,
+                    "player_bbox": hitter_bbox,
+                })
+
+                # 对手跑动速度
+                opponent_id = next(
+                    (pid for pid in player_positions if pid != hitter_id),
+                    None,
+                )
+                if opponent_id is not None:
+                    opp_start = player_mini_coords[start_frame].get(opponent_id)
+                    opp_end = player_mini_coords[end_frame].get(opponent_id) if end_frame < len(player_mini_coords) else None
+
+                    if opp_start and opp_end:
+                        opp_dist_px = _measure_distance(opp_start, opp_end)
+                        opp_dist_m = (opp_dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
+                        opp_speed_kmh = opp_dist_m / duration_s * 3.6
+
+                        # 对手在原始帧中的脚部位置
+                        start_foot_pos = None
+                        end_foot_pos = None
+                        if start_frame < len(player_detections) and opponent_id in player_detections[start_frame]:
+                            bbox = player_detections[start_frame][opponent_id]
+                            start_foot_pos = ((bbox[0] + bbox[2]) / 2, bbox[3])
+                        if end_frame < len(player_detections) and opponent_id in player_detections[end_frame]:
+                            bbox = player_detections[end_frame][opponent_id]
+                            end_foot_pos = ((bbox[0] + bbox[2]) / 2, bbox[3])
+
+                        player_speeds.append({
+                            "start_frame": start_frame,
+                            "end_frame": end_frame,
+                            "speed_kmh": round(opp_speed_kmh, 1),
+                            "player_id": opponent_id,
+                            "start_pos": start_foot_pos,
+                            "end_pos": end_foot_pos,
+                        })
+
+    logger.info(
+        f"Speed calculation: {len(ball_speeds)} ball speed events, "
+        f"{len(player_speeds)} player speed events"
+    )
+    return {
+        "ball_speeds": ball_speeds,
+        "player_speeds": player_speeds,
+    }
+
+
+def _measure_distance(p1, p2):
+    """计算两点间欧几里得距离"""
+    return ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
+
+
 def analyze_ball_trajectory(
     analysis_id: str,
     video_path: Path,
@@ -379,6 +502,7 @@ def analyze_ball_trajectory(
     # 逐帧检测 + 帧跳跃加速（CPU 环境：每 DETECTION_STEP 帧只检测 1 帧）
     # 未检测的帧通过 _interpolate_ball_positions 线性插值补全
     ball_detections: list[dict[int, list[float]]] = []
+    player_detections: list[dict[int, list[float]]] = []
     racket_detections: list[dict | None] = []
     frame_idx = 0
     started = time.monotonic()
@@ -393,6 +517,15 @@ def analyze_ball_trajectory(
     except Exception as e:
         logger.warning(f"Racket model not available: {e}")
 
+    # 尝试加载球员检测模型
+    player_tracker = None
+    try:
+        from app.pipeline.player_tracker import PlayerTracker
+        player_tracker = PlayerTracker()
+        logger.info("Player tracker loaded")
+    except Exception as e:
+        logger.warning(f"Player tracker not available: {e}")
+
     while frame_idx < num_target_frames:
         ret, frame = cap.read()
         if not ret:
@@ -404,6 +537,13 @@ def analyze_ball_trajectory(
         else:
             ball_dict = {}
         ball_detections.append(ball_dict)
+
+        # 球员检测（逐帧检测以保证跟踪连续性）
+        if player_tracker:
+            player_dict = player_tracker.detect_frame(frame)
+        else:
+            player_dict = {}
+        player_detections.append(player_dict)
 
         # 球拍检测同样跳跃（与球检测同步）
         if racket_model:
@@ -436,14 +576,14 @@ def analyze_ball_trajectory(
 
     # 检测击球时刻 - 使用两种方法
     hit_moments = []
-    
+
     # 方法1: 基于球拍检测 (如果可用)
     if racket_model and any(r is not None for r in racket_detections):
         from app.pipeline.racket_tracking import find_hit_moments as find_hit_by_racket
         racket_hit_moments = find_hit_by_racket(interpolated_detections, racket_detections, video_fps)
         hit_moments.extend(racket_hit_moments)
         logger.info(f"Found {len(racket_hit_moments)} hit moments by racket detection")
-    
+
     # 方法2: 基于轨迹分析 (从 Tennis_AI_mainland 移植)
     trajectory_hit_frames = get_ball_shot_frames(interpolated_detections)
     if trajectory_hit_frames:
@@ -452,7 +592,7 @@ def analyze_ball_trajectory(
         )
         hit_moments.extend(trajectory_hit_moments)
         logger.info(f"Found {len(trajectory_hit_moments)} hit moments by trajectory analysis")
-    
+
     # 去重 (基于帧索引)
     seen_frames = set()
     unique_hit_moments = []
@@ -461,9 +601,61 @@ def analyze_ball_trajectory(
         if frame_idx not in seen_frames:
             seen_frames.add(frame_idx)
             unique_hit_moments.append(moment)
-    
+
     hit_moments = unique_hit_moments
     logger.info(f"Total unique hit moments: {len(hit_moments)}")
+
+    # --- 新增：球员过滤 + 小场地映射 + 速度计算 ---
+    court_keypoints_list = None
+    speed_events = None
+    filtered_player_detections = player_detections
+    player_mini_coords = []
+    ball_mini_coords = []
+
+    if player_tracker and any(player_detections):
+        progress_cb and progress_cb(85.0, "Detecting court lines...", None)
+        try:
+            from app.pipeline.court_line_detector import CourtLineDetector
+            from app.pipeline.mini_court import MiniCourt
+
+            # 读取第一帧用于场地检测
+            cap2 = cv2.VideoCapture(str(video_path))
+            cap2.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            ret, first_frame = cap2.read()
+            cap2.release()
+
+            if ret:
+                court_detector = CourtLineDetector()
+                court_keypoints = court_detector.predict(first_frame)
+                court_keypoints_list = court_keypoints.tolist()
+
+                # 过滤球员（只保留离场地最近的 2 名）
+                filtered_player_detections = player_tracker.choose_and_filter_players(
+                    court_keypoints, player_detections
+                )
+
+                # 小场地映射
+                progress_cb and progress_cb(87.0, "Mapping to mini court...", None)
+                mini_court = MiniCourt(first_frame)
+                player_mini_coords, ball_mini_coords = mini_court.convert_bounding_boxes_to_mini_court_coordinates(
+                    filtered_player_detections, interpolated_detections, court_keypoints_list
+                )
+
+                # 计算速度
+                progress_cb and progress_cb(88.0, "Calculating speeds...", None)
+                speed_events = _calculate_speed_events(
+                    hit_moments,
+                    filtered_player_detections,
+                    ball_mini_coords,
+                    player_mini_coords,
+                    video_fps,
+                    mini_court.get_width_of_mini_court(),
+                )
+
+        except Exception as e:
+            logger.warning(f"Player/speed analysis failed (non-fatal): {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
     # 计算检测统计
     valid_count = sum(1 for d in interpolated_detections if len(d) > 0)
@@ -502,6 +694,14 @@ def analyze_ball_trajectory(
         "hit_moments": hit_moments,  # 击球时刻列表
     }
 
+    # 新增字段（仅在成功时添加）
+    if court_keypoints_list is not None:
+        artifact["court_keypoints"] = court_keypoints_list
+    if filtered_player_detections and any(filtered_player_detections):
+        artifact["player_detections"] = filtered_player_detections
+    if speed_events is not None:
+        artifact["speed_events"] = speed_events
+
     # 保存 artifact
     settings.analysis_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = settings.analysis_dir / f"{analysis_id}.ball.json.gz"
@@ -525,11 +725,15 @@ def analyze_ball_trajectory(
             sample_fps=sample_fps,
             progress_cb=progress_cb,
             hit_moments=hit_moments,
+            player_detections=filtered_player_detections if filtered_player_detections and any(filtered_player_detections) else None,
+            speed_events=speed_events,
         )
         logger.info(f"Ball trajectory video saved to: {video_output_path}")
 
     except Exception as e:
         logger.warning(f"Failed to generate ball trajectory video: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
         video_output_path = None
 
     if progress_cb:

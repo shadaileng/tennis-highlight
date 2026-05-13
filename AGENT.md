@@ -12,7 +12,7 @@
 |----|------|
 | 后端框架 | FastAPI (Python 3.11+) |
 | 视频处理 | OpenCV (`opencv-python-headless`), ffmpeg |
-| ML 模型 | YOLOv5 (网球检测), YOLOv8/YOLO11-pose (姿态检测) |
+| ML 模型 | YOLOv5 (网球检测), YOLOv8 (球员检测), YOLOv8/YOLO11-pose (姿态检测), ResNet50 (场地关键点) |
 | 数据库 | SQLite (`app/database.py` 管理) |
 | 前端 | 纯 JS + HTML + CSS (单页应用, 无框架) |
 | 测试 | `unittest` (Python) + `jsdom` (Node 前端测试) |
@@ -28,9 +28,12 @@ tennis-highlight/
 │   ├── database.py               # SQLite CRUD
 │   ├── models.py                 # Pydantic 请求/响应模型
 │   ├── pipeline/                 # 核心处理管线
-│   │   ├── ball_tracking.py      # YOLO 网球检测 + 插值 + 击球检测
-│   │   ├── video_renderer.py     # 轨迹视频渲染（Catmull-Rom 样条 + ffmpeg H.264 pipe）
+│   │   ├── ball_tracking.py      # YOLO 网球检测 + 插值 + 击球检测 + 球速/跑动速度
+│   │   ├── video_renderer.py     # 轨迹视频渲染（Catmull-Rom 样条 + ffmpeg H.264 pipe  + 球速/跑动渲染）
 │   │   ├── racket_tracking.py    # 球拍检测
+│   │   ├── court_line_detector.py  # ResNet50 场地关键点检测（14 关键点）
+│   │   ├── player_tracker.py     # YOLO 球员检测与跟踪
+│   │   ├── mini_court.py         # 小场地坐标系映射（像素↔米转换）
 │   │   ├── motion_analysis.py    # 运动检测核心算法
 │   │   ├── orchestrator.py       # 后台任务调度
 │   │   ├── pose_analysis.py      # 姿态分析
@@ -107,7 +110,7 @@ hit_moments: list[dict] = [
 artifact = {
     "metadata": {
         "detector": "ball_tracking_yolo",
-        "detector_version": 5,  # v5: 新增帧跳跃检测加速
+        "detector_version": 6,  # v6: 新增球员检测 + 球速/跑动速度
         "model_path": "models/yolo5_last.pt",
         "video_width": int, "video_height": int,
         "video_fps": float, "duration_s": float,
@@ -123,8 +126,56 @@ artifact = {
     },
     "ball_detections": [{track_id: [x1,y1,x2,y2]}, ...],
     "hit_moments": [...],
+    # v6 新增字段（可选，检测成功时存在）：
+    "court_keypoints": [28个float],  # 14个场地关键点坐标 (x0,y0,x1,y1,...)
+    "player_detections": [{track_id: [x1,y1,x2,y2]}, ...],  # 过滤后的2名球员检测框
+    "speed_events": {  # 速度事件
+        "ball_speeds": [
+            {
+                "frame_idx": int,        # 击球帧
+                "speed_kmh": float,      # 球速 km/h
+                "hitter_id": int,        # 击球球员的 track_id
+                "player_bbox": [x1,y1,x2,y2],  # 击球球员的边界框
+            },
+        ],
+        "player_speeds": [
+            {
+                "start_frame": int,
+                "end_frame": int,
+                "speed_kmh": float,      # 跑动速度 km/h
+                "player_id": int,        # 跑动球员的 track_id
+                "start_pos": [x,y],      # 原始帧中的脚部起始位置
+                "end_pos": [x,y],        # 原始帧中的脚部结束位置
+            },
+        ],
+    },
 }
 ```
+
+### 速度事件计算
+
+参考 Tennis_AI_mainland 的算法：
+1. **小场地映射**：通过 `court_line_detector`（ResNet50）检测场地 14 关键点，再用 `mini_court` 将球员和球映射到小场地坐标系
+2. **球速**：相邻击球帧间球在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 × 3.6
+3. **跑动速度**：相邻击球帧间对手在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 × 3.6
+4. **击球球员判断**：击球帧时离球最近的球员
+5. **小场地比例尺**：用 `DOUBLE_LINE_WIDTH`（10.97m）对标小场地绘制宽度
+
+### 视频渲染器函数签名
+
+```python
+def draw_ball_trajectory_video(
+    video_path, ball_detections, output_path,
+    range_start_s=0.0, sample_fps=4.0,
+    progress_cb=None, hit_moments=None,
+    player_detections=None,      # v6 新增
+    speed_events=None,           # v6 新增
+) -> Path
+```
+
+渲染效果：
+- **球速文本**：击球后在击球球员右上方显示青色渐变文本 "XXX km/h"，持续约 0.8 秒
+- **跑动连线**：在起点和终点之间画黄色虚线，中点显示 "XXX km/h"，持续约 1.0 秒
 
 ## 多球跟踪（feature/multi-ball-tracking 分支）
 

@@ -42,6 +42,10 @@ def _catmull_rom_chunk(p0, p1, p2, p3, num_pts: int = 8) -> list[tuple[int, int]
 # 放射性光芒系统
 _spark_effects: list[dict] = []
 
+# 球速/跑动速度叠加系统
+_ball_speed_overlays: list[dict] = []
+_player_speed_overlays: list[dict] = []
+
 
 def _init_sparks(hit_moments: list[dict], video_fps: float):
     """初始化细长菱形飞出效果"""
@@ -51,7 +55,7 @@ def _init_sparks(hit_moments: list[dict], video_fps: float):
     for hit in hit_moments:
         frame_idx = hit.get("frame_idx", int(hit.get("time_s", 0) * video_fps))
         pos = hit.get("ball_pos", (0, 0))
-        
+
         if not isinstance(pos, (list, tuple)) or len(pos) < 2:
             logger.warning(f"Invalid ball_pos for hit moment: {hit}")
             continue
@@ -59,7 +63,7 @@ def _init_sparks(hit_moments: list[dict], video_fps: float):
         # 创建15-25个细长菱形
         num_diamonds = random.randint(15, 25)
         diamonds = []
-        
+
         for _ in range(num_diamonds):
             angle = random.uniform(0, 2 * np.pi)
             speed = random.uniform(10, 25)
@@ -67,7 +71,7 @@ def _init_sparks(hit_moments: list[dict], video_fps: float):
             length = random.uniform(35, 70)
             # 宽度比（非常小 = 极细长）
             width_ratio = random.uniform(0.08, 0.2)
-            
+
             diamonds.append({
                 "angle": angle,
                 "speed": speed,
@@ -82,8 +86,147 @@ def _init_sparks(hit_moments: list[dict], video_fps: float):
             "y": pos[1],
             "diamonds": diamonds,
         })
-    
+
     logger.info(f"Initialized {len(_spark_effects)} thin diamond effects for {len(hit_moments)} hit moments")
+
+
+def _init_speed_overlays(speed_events: dict | None, video_fps: float):
+    """初始化球速和跑动速度叠加系统"""
+    global _ball_speed_overlays, _player_speed_overlays
+    _ball_speed_overlays = []
+    _player_speed_overlays = []
+
+    if not speed_events:
+        return
+
+    # 球速显示：击球后在击球球员右上方显示约 0.8 秒
+    for bs in speed_events.get("ball_speeds", []):
+        duration_frames = max(int(0.8 * video_fps), 1)
+        _ball_speed_overlays.append({
+            "frame_start": bs["frame_idx"],
+            "duration_frames": duration_frames,
+            "speed_kmh": bs["speed_kmh"],
+            "player_bbox": bs.get("player_bbox", []),
+        })
+
+    # 跑动速度：在击球间隔内画连线，显示约 1.0 秒
+    for ps in speed_events.get("player_speeds", []):
+        duration_frames = max(int(1.0 * video_fps), 1)
+        _player_speed_overlays.append({
+            "frame_start": ps["start_frame"],
+            "duration_frames": duration_frames,
+            "speed_kmh": ps["speed_kmh"],
+            "start_pos": ps.get("start_pos"),
+            "end_pos": ps.get("end_pos"),
+        })
+
+    logger.info(
+        f"Initialized {len(_ball_speed_overlays)} ball speed overlays, "
+        f"{len(_player_speed_overlays)} player speed overlays"
+    )
+
+
+def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarray:
+    """在当前帧绘制球速文本和跑动速度连线"""
+    global _ball_speed_overlays, _player_speed_overlays
+
+    h, w = frame.shape[:2]
+
+    # 绘制跑动速度连线（在球速文本之下）
+    for overlay in _player_speed_overlays:
+        age = current_frame_idx - overlay["frame_start"]
+        if age < 0 or age > overlay["duration_frames"]:
+            continue
+
+        progress = age / overlay["duration_frames"] if overlay["duration_frames"] > 0 else 1
+        alpha = max(0, 1.0 - progress)
+        if alpha <= 0:
+            continue
+
+        start_pos = overlay.get("start_pos")
+        end_pos = overlay.get("end_pos")
+        if not start_pos or not end_pos:
+            continue
+
+        p1 = (int(start_pos[0]), int(start_pos[1]))
+        p2 = (int(end_pos[0]), int(end_pos[1]))
+
+        # 确保点在画面内
+        if not (0 <= p1[0] < w and 0 <= p1[1] < h and 0 <= p2[0] < w and 0 <= p2[1] < h):
+            continue
+
+        # 画连线（黄色半透明）
+        overlay_img = frame.copy()
+        cv2.line(overlay_img, p1, p2, (0, 255, 255), 3)
+        cv2.addWeighted(overlay_img, alpha * 0.6, frame, 1 - alpha * 0.6, 0, frame)
+
+        # 在连线中点显示速度
+        mid_x = (p1[0] + p2[0]) // 2
+        mid_y = (p1[1] + p2[1]) // 2
+
+        speed_text = f"{overlay['speed_kmh']} km/h"
+        # 文字背景
+        (tw, th), _ = cv2.getTextSize(speed_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        text_x = mid_x - tw // 2
+        text_y = mid_y - 10
+        cv2.rectangle(
+            overlay_img,
+            (text_x - 4, text_y - th - 4),
+            (text_x + tw + 4, text_y + 4),
+            (0, 0, 0),
+            -1,
+        )
+        cv2.addWeighted(overlay_img, 0.5, frame, 0.5, 0, frame)
+
+        # 速度文本（黄色）
+        cv2.putText(
+            frame, speed_text, (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
+        )
+
+    # 绘制击球球速文本（在球员右上方显示）
+    for overlay in _ball_speed_overlays:
+        age = current_frame_idx - overlay["frame_start"]
+        if age < 0 or age > overlay["duration_frames"]:
+            continue
+
+        progress = age / overlay["duration_frames"] if overlay["duration_frames"] > 0 else 1
+        alpha = max(0, 1.0 - progress)
+        if alpha <= 0:
+            continue
+
+        bbox = overlay.get("player_bbox", [])
+        if not bbox or len(bbox) < 4:
+            continue
+
+        x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
+
+        # 显示在击球球员右上方
+        text_x = x2 + 10
+        text_y = y1 - 10
+
+        speed_text = f"{overlay['speed_kmh']} km/h"
+        color_intensity = int(255 * alpha)
+        color = (0, color_intensity, color_intensity)  # 青色渐淡
+
+        overlay_img = frame.copy()
+        # 文字背景
+        (tw, th), _ = cv2.getTextSize(speed_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.rectangle(
+            overlay_img,
+            (text_x - 4, text_y - th - 4),
+            (text_x + tw + 4, text_y + 4),
+            (0, 0, 0),
+            -1,
+        )
+        cv2.addWeighted(overlay_img, 0.45, frame, 0.55, 0, frame)
+
+        cv2.putText(
+            frame, speed_text, (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2,
+        )
+
+    return frame
 
 
 def _draw_sparks(frame: np.ndarray, current_frame_idx: int) -> np.ndarray:
@@ -249,6 +392,8 @@ def draw_ball_trajectory_video(
     sample_fps: float = 4.0,
     progress_cb: ProgressCallback | None = None,
     hit_moments: list[dict] | None = None,
+    player_detections: list[dict[int, list[float]]] | None = None,
+    speed_events: dict | None = None,
 ) -> Path:
     """
     在原始视频上绘制网球轨迹并输出 MP4
@@ -263,6 +408,8 @@ def draw_ball_trajectory_video(
         sample_fps: 采样帧率
         progress_cb: 进度回调
         hit_moments: 击球时刻列表（用于火花效果）
+        player_detections: 逐帧球员检测框（用于球速文字定位）
+        speed_events: 速度事件数据（含 ball_speeds, player_speeds）
 
     Returns:
         输出视频路径
@@ -322,6 +469,10 @@ def draw_ball_trajectory_video(
         _init_sparks(hit_moments, video_fps)
         logger.info(f"Initialized spark effects for {len(hit_moments)} hit moments")
 
+    # 初始化速度叠加系统
+    if speed_events:
+        _init_speed_overlays(speed_events, video_fps)
+
     try:
         frame_idx = 0
 
@@ -333,6 +484,10 @@ def draw_ball_trajectory_video(
             # 绘制火花效果（在球之前）
             if hit_moments:
                 frame = _draw_sparks(frame, frame_idx)
+
+            # 绘制速度叠加（球速文本 + 跑动连线）
+            if speed_events:
+                frame = _draw_speed_overlays(frame, frame_idx)
 
             # 逐帧绘制检测结果
             if frame_idx < len(ball_detections):
@@ -433,6 +588,8 @@ def render_ball_video_from_artifact(
     ball_detections = artifact.get("ball_detections", [])
     metadata = artifact.get("metadata", {})
     hit_moments = artifact.get("hit_moments", [])
+    player_detections = artifact.get("player_detections", None)
+    speed_events = artifact.get("speed_events", None)
 
     return draw_ball_trajectory_video(
         video_path=video_path,
@@ -442,4 +599,6 @@ def render_ball_video_from_artifact(
         sample_fps=metadata.get("sample_fps", 4.0),
         progress_cb=progress_cb,
         hit_moments=hit_moments if hit_moments else None,
+        player_detections=player_detections,
+        speed_events=speed_events,
     )

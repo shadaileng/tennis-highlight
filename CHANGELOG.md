@@ -1,6 +1,40 @@
 # 开发日志 (CHANGELOG)
 
-## 2026-05-13 10:56:00 (UTC+8)
+## 2026-05-13 11:00:00 (UTC+8)
+
+### feat: 新增球员检测、小场地映射与球速/跑动速度计算
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/court_line_detector.py` | 新建：ResNet50 场地14关键点检测 |
+| `app/pipeline/player_tracker.py` | 新建：YOLO 球员检测与过滤 |
+| `app/pipeline/mini_court.py` | 新建：小场地坐标系映射，像素↔米转换 |
+| `app/pipeline/ball_tracking.py` | 集成球员检测+小场地映射+球速/跑动速度计算 |
+| `app/pipeline/video_renderer.py` | 新增球速文本渲染和跑动连线渲染 |
+| `AGENT.md` | 同步更新目录结构、artifact 格式、速度事件说明 |
+
+### 详细说明
+
+1. **新增3个模块**：
+   - `court_line_detector.py`：加载 `keypoints_model.pth`（ResNet50），预测14个场地关键点坐标
+   - `player_tracker.py`：使用 YOLOv8 逐帧检测球员，自动过滤保留距场地最近的2人
+   - `mini_court.py`：建立250x500的小场地坐标系，利用球员身高作比例尺实现像素↔米转换
+
+2. **球速计算**（`_calculate_speed_events`）：
+   - 相邻击球帧间，球在小场地上的位移 × `DOUBLE_LINE_WIDTH`(10.97m) / 小场地宽度 / 时间 × 3.6
+   - 击球球员判断：击球帧时离球最近的球员
+
+3. **跑动速度计算**：
+   - 同一段击球间隔内，对手（非击球方）在小场地上的位移，公式同球速
+
+4. **渲染效果**：
+   - 球速：击球后在球员右上方显示青色渐淡文本 "XXX km/h"，持续0.8秒
+   - 跑动连线：起点→终点画黄色半透明连线，中点显示 "XXX km/h"，持续1.0秒
+
+5. **失败安全**：球员检测/场地检测失败时不影响原有球检测和轨迹渲染功能
+
+---
 
 ### fix: 删除视频时未清理 data/analysis 和 data/ball_videos 下的残留文件
 
