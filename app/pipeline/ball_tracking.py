@@ -339,6 +339,7 @@ def _calculate_speed_events(
     player_mini_coords: list[dict[int, tuple]],
     video_fps: float,
     mini_court_width: int,
+    court_keypoints: list[float] | None = None,
 ) -> dict:
     """
     计算球速和球员跑动速度（仅靠近镜头一侧的球员）
@@ -346,7 +347,8 @@ def _calculate_speed_events(
     算法: 相邻击球帧之间，计算球/球员在小场地上的位移 → 米 / 时间 → m/s
     参考 Tennis_AI_mainland/tennis_analysis/main.py
 
-    靠近镜头球员判断：在画面中 foot y 坐标更大的球员（更靠画面下方）。
+    靠近镜头球员判断：优先使用网线分界（court_keypoints 中的关键点 12/13），
+    回退到 foot y 比较。
 
     Args:
         hit_moments: 击球时刻列表 [{"frame_idx": int, ...}]
@@ -355,6 +357,7 @@ def _calculate_speed_events(
         player_mini_coords: 逐帧球员在小场地上的坐标
         video_fps: 视频帧率
         mini_court_width: 小场地绘制宽度（像素）
+        court_keypoints: 可选。28 个 float 的场地关键点，用于网线分界
 
     Returns:
         {
@@ -364,8 +367,13 @@ def _calculate_speed_events(
     """
     from app.pipeline.mini_court import DOUBLE_LINE_WIDTH
 
-    # 确定靠近镜头一侧的球员
-    near_player_id = _find_near_side_player(player_detections)
+    # 确定靠近镜头一侧的球员：优先用网线分界，回退到 foot y 比较
+    near_player_id = None
+    if court_keypoints:
+        player_side_ids = _assign_player_ids_by_court_side(court_keypoints, player_detections)
+        near_player_id = player_side_ids.get("near")
+    if near_player_id is None:
+        near_player_id = _find_near_side_player(player_detections)
     if near_player_id is None:
         logger.warning("Could not determine near-side player, skipping speed calculation")
         return {"ball_speeds": [], "player_speeds": []}
@@ -460,24 +468,77 @@ def _calculate_speed_events(
     }
 
 
+def _assign_player_ids_by_court_side(
+    court_keypoints: list[float],
+    player_detections: list[dict[int, list[float]]],
+) -> dict[str, int]:
+    """
+    基于网线位置确定两位球员的稳定身份。
+
+    使用场地关键点 12 和 13（网柱）的 y 坐标均值作为网线分界线。
+    - foot_y > net_y → 网线下方（近镜头侧，near_player_id）
+    - foot_y < net_y → 网线上方（远镜头侧，far_player_id）
+
+    相比基于 foot_y 大小的相对比较，网线分界是绝对基准，
+    不受球员身高差异或同时近/远的影响。
+
+    Args:
+        court_keypoints: 28 个 float 的场地关键点列表 [x0,y0,x1,y1,...,x13,y13]
+        player_detections: 逐帧球员检测框
+
+    Returns:
+        {"near": near_player_id, "far": far_player_id} 或空字典（无法确定时）
+    """
+    if len(court_keypoints) < 28:
+        logger.warning("Invalid court_keypoints length, need 28 values (14 keypoints)")
+        return {}
+
+    # 网线 y = keypoint 12 (left net post) 和 keypoint 13 (right net post) 的 y 均值
+    net_y = (court_keypoints[25] + court_keypoints[27]) / 2.0
+
+    near_id = None
+    far_id = None
+
+    for det in player_detections:
+        if len(det) >= 2:
+            for pid, bbox in det.items():
+                foot_y = bbox[3]  # y2 = 脚部位置
+                if foot_y > net_y:
+                    near_id = pid
+                else:
+                    far_id = pid
+            break  # 用第一帧有双人检测的数据
+
+    if near_id is not None and far_id is not None:
+        logger.info(
+            f"Player side assignment: near={near_id} (foot_y > net_y={net_y:.0f}), "
+            f"far={far_id} (foot_y < net_y)"
+        )
+        return {"near": near_id, "far": far_id}
+
+    logger.warning("Could not determine both player sides from court keypoints")
+    return {}
+
+
 def _find_near_side_player(player_detections: list[dict[int, list[float]]]) -> int | None:
     """
     确定靠近镜头一侧的球员（foot y 坐标更大的球员 = 更靠画面下方）
     通常在固定三脚架拍摄的网球视频中，近端球员在画面底部。
+
+    此为回退方案：当 court_keypoints 不可用时使用。
     """
     for det in player_detections:
         if len(det) >= 2:
-            # 取两个球员中 foot y 更大的（更靠近镜头）
             player_ids = list(det.keys())
             foot_y_positions = []
             for pid in player_ids:
                 bbox = det[pid]
-                foot_y = bbox[3]  # y2 = 脚部位置
+                foot_y = bbox[3]
                 foot_y_positions.append((pid, foot_y))
 
             foot_y_positions.sort(key=lambda x: x[1], reverse=True)
             near_id = foot_y_positions[0][0]
-            logger.info(f"Near-side player: track_id={near_id} (foot_y={foot_y_positions[0][1]:.0f})")
+            logger.info(f"Near-side player (fallback): track_id={near_id} (foot_y={foot_y_positions[0][1]:.0f})")
             return near_id
 
     return None
@@ -683,6 +744,7 @@ def analyze_ball_trajectory(
                     player_mini_coords,
                     video_fps,
                     mini_court.get_width_of_mini_court(),
+                    court_keypoints=court_keypoints_list,
                 )
 
         except Exception as e:

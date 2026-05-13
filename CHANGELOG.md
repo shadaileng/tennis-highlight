@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 11:10:00 (UTC+8)
+
+### refactor: 用网线分界法替代 foot_y 比较来确定球员身份
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | 新增 `_assign_player_ids_by_court_side()` 函数；修改 `_calculate_speed_events()` 签名增加 court_keypoints 参数；更新调用处传入 court_keypoints_list |
+| `AGENT.md` | 更新速度事件计算章节中球员确定方式描述 |
+
+### 详细说明
+
+1. 新增 `_assign_player_ids_by_court_side()` 函数，使用场地关键点 12/13（网柱）的 y 均值作为网线分界线，判断球员在网前还是网后，从而分配 near/far 身份
+2. `_calculate_speed_events()` 增加 `court_keypoints` 可选参数；传入时优先使用网线分界法，回退到原有的 foot_y 比较
+3. 调用处（`analyze_ball_trajectory`）传入 `court_keypoints_list` 参数
+4. 相比原来的 foot_y 相对比较，网线分界是绝对基准，不受球员身高差异或 track_id 变化影响
+
+---
+
 ## 2026-05-13 11:04:00 (UTC+8)
 
 ### feat: 跑动速度连线起点到终点延伸动画
