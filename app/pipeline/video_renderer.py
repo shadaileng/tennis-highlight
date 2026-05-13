@@ -105,7 +105,7 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
         _ball_speed_overlays.append({
             "frame_start": bs["frame_idx"],
             "duration_frames": duration_frames,
-            "speed_kmh": bs["speed_kmh"],
+            "speed_ms": bs["speed_ms"],
             "player_bbox": bs.get("player_bbox", []),
         })
 
@@ -115,7 +115,7 @@ def _init_speed_overlays(speed_events: dict | None, video_fps: float):
         _player_speed_overlays.append({
             "frame_start": ps["start_frame"],
             "duration_frames": duration_frames,
-            "speed_kmh": ps["speed_kmh"],
+            "speed_ms": ps["speed_ms"],
             "start_pos": ps.get("start_pos"),
             "end_pos": ps.get("end_pos"),
         })
@@ -164,7 +164,7 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
         mid_x = (p1[0] + p2[0]) // 2
         mid_y = (p1[1] + p2[1]) // 2
 
-        speed_text = f"{overlay['speed_kmh']} km/h"
+        speed_text = f"{overlay['speed_ms']} m/s"
         # 文字背景
         (tw, th), _ = cv2.getTextSize(speed_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         text_x = mid_x - tw // 2
@@ -205,7 +205,7 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
         text_x = x2 + 10
         text_y = y1 - 10
 
-        speed_text = f"{overlay['speed_kmh']} km/h"
+        speed_text = f"{overlay['speed_ms']} m/s"
         color_intensity = int(255 * alpha)
         color = (0, color_intensity, color_intensity)  # 青色渐淡
 

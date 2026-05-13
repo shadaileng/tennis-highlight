@@ -1,5 +1,25 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 11:02:00 (UTC+8)
+
+### fix: 球速/跑动速度改为 m/s，仅计算靠近镜头一侧球员
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | `_calculate_speed_events`: 移除 `*3.6` 单位改为 m/s；新增 `_find_near_side_player` 仅输出靠近镜头球员的球速和跑动速度 |
+| `app/pipeline/video_renderer.py` | `speed_kmh` → `speed_ms`，文本标签 `km/h` → `m/s` |
+| `AGENT.md` | 更新速度事件说明，新增靠近镜头球员逻辑 |
+
+### 详细说明
+
+1. 单位变更：`ball_speeds[].speed_kmh` / `player_speeds[].speed_kmh` → `speed_ms`，移除 `×3.6` 换算
+2. 新增 `_find_near_side_player`：取第一帧中 foot y 坐标更大的球员（画面下方=靠近三脚架镜头）作为目标球员
+3. 球速：仅当该球员为击球者时记录
+4. 跑动速度：仅当该球员为非击球方时记录
+
+---
+
 ## 2026-05-13 11:00:00 (UTC+8)
 
 ### feat: 新增球员检测、小场地映射与球速/跑动速度计算

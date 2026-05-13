@@ -341,10 +341,12 @@ def _calculate_speed_events(
     mini_court_width: int,
 ) -> dict:
     """
-    计算球速和球员跑动速度
+    计算球速和球员跑动速度（仅靠近镜头一侧的球员）
 
-    算法: 相邻击球帧之间，计算球在小场地上的位移 → 米 → km/h
+    算法: 相邻击球帧之间，计算球/球员在小场地上的位移 → 米 / 时间 → m/s
     参考 Tennis_AI_mainland/tennis_analysis/main.py
+
+    靠近镜头球员判断：在画面中 foot y 坐标更大的球员（更靠画面下方）。
 
     Args:
         hit_moments: 击球时刻列表 [{"frame_idx": int, ...}]
@@ -356,11 +358,17 @@ def _calculate_speed_events(
 
     Returns:
         {
-            "ball_speeds": [{frame_idx, speed_kmh, player_bbox}, ...],
-            "player_speeds": [{start_frame, end_frame, speed_kmh, start_pos, end_pos}, ...]
+            "ball_speeds": [{frame_idx, speed_ms, player_bbox}, ...],
+            "player_speeds": [{start_frame, end_frame, speed_ms, start_pos, end_pos}, ...]
         }
     """
     from app.pipeline.mini_court import DOUBLE_LINE_WIDTH
+
+    # 确定靠近镜头一侧的球员
+    near_player_id = _find_near_side_player(player_detections)
+    if near_player_id is None:
+        logger.warning("Could not determine near-side player, skipping speed calculation")
+        return {"ball_speeds": [], "player_speeds": []}
 
     ball_speeds = []
     player_speeds = []
@@ -375,16 +383,16 @@ def _calculate_speed_events(
         if duration_s <= 0:
             continue
 
-        # 球速：相邻击球帧间球位移
+        # 球速：相邻击球帧间球位移 → m/s
         ball_start = ball_mini_coords[start_frame].get(1) if start_frame < len(ball_mini_coords) else None
         ball_end = ball_mini_coords[end_frame].get(1) if end_frame < len(ball_mini_coords) else None
 
         if ball_start and ball_end:
             dist_px = _measure_distance(ball_start, ball_end)
             dist_m = (dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
-            ball_speed_kmh = dist_m / duration_s * 3.6
+            ball_speed_ms = dist_m / duration_s
 
-            # 判断击球球员：击球帧时谁离球最近
+            # 判断击球球员
             player_positions = player_mini_coords[start_frame] if start_frame < len(player_mini_coords) else {}
             hitter_id = None
             if player_positions:
@@ -395,33 +403,33 @@ def _calculate_speed_events(
                     ),
                 )
 
-                # 击球球员的原始边界框（用于渲染）
-                hitter_bbox = []
-                if start_frame < len(player_detections) and hitter_id in player_detections[start_frame]:
-                    hitter_bbox = player_detections[start_frame][hitter_id]
+                # 仅记录靠近镜头球员的球速
+                if hitter_id == near_player_id:
+                    hitter_bbox = []
+                    if start_frame < len(player_detections) and hitter_id in player_detections[start_frame]:
+                        hitter_bbox = player_detections[start_frame][hitter_id]
 
-                ball_speeds.append({
-                    "frame_idx": start_frame,
-                    "speed_kmh": round(ball_speed_kmh, 1),
-                    "hitter_id": hitter_id,
-                    "player_bbox": hitter_bbox,
-                })
+                    ball_speeds.append({
+                        "frame_idx": start_frame,
+                        "speed_ms": round(ball_speed_ms, 1),
+                        "hitter_id": hitter_id,
+                        "player_bbox": hitter_bbox,
+                    })
 
-                # 对手跑动速度
+                # 跑动速度：仅计算靠近镜头球员的跑动
                 opponent_id = next(
                     (pid for pid in player_positions if pid != hitter_id),
                     None,
                 )
-                if opponent_id is not None:
+                if opponent_id is not None and opponent_id == near_player_id:
                     opp_start = player_mini_coords[start_frame].get(opponent_id)
                     opp_end = player_mini_coords[end_frame].get(opponent_id) if end_frame < len(player_mini_coords) else None
 
                     if opp_start and opp_end:
                         opp_dist_px = _measure_distance(opp_start, opp_end)
                         opp_dist_m = (opp_dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
-                        opp_speed_kmh = opp_dist_m / duration_s * 3.6
+                        opp_speed_ms = opp_dist_m / duration_s
 
-                        # 对手在原始帧中的脚部位置
                         start_foot_pos = None
                         end_foot_pos = None
                         if start_frame < len(player_detections) and opponent_id in player_detections[start_frame]:
@@ -434,20 +442,44 @@ def _calculate_speed_events(
                         player_speeds.append({
                             "start_frame": start_frame,
                             "end_frame": end_frame,
-                            "speed_kmh": round(opp_speed_kmh, 1),
+                            "speed_ms": round(opp_speed_ms, 1),
                             "player_id": opponent_id,
                             "start_pos": start_foot_pos,
                             "end_pos": end_foot_pos,
                         })
 
     logger.info(
-        f"Speed calculation: {len(ball_speeds)} ball speed events, "
+        f"Speed calculation (near-side player {near_player_id}): "
+        f"{len(ball_speeds)} ball speed events, "
         f"{len(player_speeds)} player speed events"
     )
     return {
         "ball_speeds": ball_speeds,
         "player_speeds": player_speeds,
     }
+
+
+def _find_near_side_player(player_detections: list[dict[int, list[float]]]) -> int | None:
+    """
+    确定靠近镜头一侧的球员（foot y 坐标更大的球员 = 更靠画面下方）
+    通常在固定三脚架拍摄的网球视频中，近端球员在画面底部。
+    """
+    for det in player_detections:
+        if len(det) >= 2:
+            # 取两个球员中 foot y 更大的（更靠近镜头）
+            player_ids = list(det.keys())
+            foot_y_positions = []
+            for pid in player_ids:
+                bbox = det[pid]
+                foot_y = bbox[3]  # y2 = 脚部位置
+                foot_y_positions.append((pid, foot_y))
+
+            foot_y_positions.sort(key=lambda x: x[1], reverse=True)
+            near_id = foot_y_positions[0][0]
+            logger.info(f"Near-side player: track_id={near_id} (foot_y={foot_y_positions[0][1]:.0f})")
+            return near_id
+
+    return None
 
 
 def _measure_distance(p1, p2):
