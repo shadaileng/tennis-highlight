@@ -138,10 +138,8 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
         if age < 0 or age > overlay["duration_frames"]:
             continue
 
-        progress = age / overlay["duration_frames"] if overlay["duration_frames"] > 0 else 1
-        alpha = max(0, 1.0 - progress)
-        if alpha <= 0:
-            continue
+        total_duration = overlay["duration_frames"]
+        progress = age / total_duration if total_duration > 0 else 1
 
         start_pos = overlay.get("start_pos")
         end_pos = overlay.get("end_pos")
@@ -155,14 +153,39 @@ def _draw_speed_overlays(frame: np.ndarray, current_frame_idx: int) -> np.ndarra
         if not (0 <= p1[0] < w and 0 <= p1[1] < h and 0 <= p2[0] < w and 0 <= p2[1] < h):
             continue
 
+        # 动画分两阶段：
+        #   阶段1 (0-60% 时长): 连线从起点向终点延伸
+        #   阶段2 (60-100% 时长): 完整连线，渐淡消失
+        extend_phase = 0.6  # 前60%时间用于延伸
+        extend_progress = min(1.0, progress / extend_phase) if extend_phase > 0 else 1.0
+        alpha = max(0, 1.0 - (progress - extend_phase) / (1.0 - extend_phase)) if progress > extend_phase else 1.0
+
+        # 根据延伸进度计算当前线段的终点
+        if extend_progress < 1.0:
+            current_end = (
+                int(p1[0] + (p2[0] - p1[0]) * extend_progress),
+                int(p1[1] + (p2[1] - p1[1]) * extend_progress),
+            )
+            # 显示文本在当前线段的中间位置
+            mid_x = (p1[0] + current_end[0]) // 2
+            mid_y = (p1[1] + current_end[1]) // 2
+        else:
+            current_end = p2
+            mid_x = (p1[0] + p2[0]) // 2
+            mid_y = (p1[1] + p2[1]) // 2
+
+        if alpha <= 0:
+            continue
+
         # 画连线（黄色半透明）
         overlay_img = frame.copy()
-        cv2.line(overlay_img, p1, p2, (0, 255, 255), 3)
+        cv2.line(overlay_img, p1, current_end, (0, 255, 255), 3)
         cv2.addWeighted(overlay_img, alpha * 0.6, frame, 1 - alpha * 0.6, 0, frame)
 
-        # 在连线中点显示速度
-        mid_x = (p1[0] + p2[0]) // 2
-        mid_y = (p1[1] + p2[1]) // 2
+        # 在延伸端点画移动圆点（增加动画感）
+        if extend_progress < 1.0:
+            cv2.circle(frame, current_end, 5, (0, 255, 255), -1)
+            cv2.circle(frame, current_end, 8, (255, 255, 255), 2)
 
         speed_text = f"{overlay['speed_ms']} m/s"
         # 文字背景
