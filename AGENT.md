@@ -136,8 +136,6 @@ artifact = {
 | | `_interpolate_ball_positions` 按 `track_id` 独立插值 |
 | | `get_ball_shot_frames` 每个球分别分析击球，结果合并去重 |
 | | `DETECTION_STEP=3` 帧跳跃检测，每3帧检测1帧，~3x加速（CPU环境） |
-| | `_bbox_iou` + `_batch_detect` IoU批量跟踪（GPU环境备选） |
-| `app/pipeline/racket_tracking.py` | `_batch_racket_detect` 批量球拍检测（GPU环境备选） |
 | `app/pipeline/video_renderer.py` | `trajectory_points: dict[int, list]` 按球 ID 分开存储轨迹 |
 | | 每个球使用不同颜色（8 种循环），标记框显示 `Ball {id}` |
 
@@ -186,7 +184,6 @@ else:
 
 - CPU 环境下每 3 帧仅检测 1 帧，其余由线性插值补全
 - 实测加速比 ~3.0x（4.9fps → 14.6fps），插值后 100% 帧有坐标
-- GPU 环境可使用 `_batch_detect` 做批量推理 + IoU 跟踪（备选方案）
 - 球拍检测与球检测同步跳跃
 
 ## 测试规范
@@ -210,6 +207,7 @@ tests/test_<module_name>.py
 - 实例方法 `setUp` / `tearDown` 做每次准备/清理
 - 测试方法以 `test_` 开头
 - 视频测试使用 `setUpClass` 跳过不存在的文件
+- **测试资源文件必须参数化**：视频路径等资源通过命令行参数或函数参数传入，禁止硬编码（详见项目规则 `test-resource-params`）
 - **不要修改 `app/config` 的全局状态**：必须保存原始值并在 `tearDown` / `finally` 中恢复
 
 ### 多球测试脚本

@@ -1,7 +1,11 @@
 """
 性能对比基准测试
 对比 全帧检测 与 帧跳跃检测+插值 的性能
+
+用法:
+    PYTHONPATH=. python tests/benchmark_skip_frames.py <video_path> [--duration N]
 """
+import argparse
 import time
 import logging
 from pathlib import Path
@@ -15,7 +19,15 @@ from app.pipeline.ball_tracking import (
     _filter_stationary_tracks, DETECTION_STEP
 )
 
-video_path = Path("data/uploads/acb378840d7015bd23faa08dd82d1e61_raw.mp4")
+parser = argparse.ArgumentParser(description="帧跳跃检测加速基准测试")
+parser.add_argument("video", type=str, help="视频文件路径")
+parser.add_argument("--duration", type=float, default=None, help="测试时长（秒），默认全时长")
+args = parser.parse_args()
+
+video_path = Path(args.video)
+if not video_path.exists():
+    print(f"错误: 视频文件不存在: {video_path}")
+    exit(1)
 model = _get_ball_model()
 
 cap = cv2.VideoCapture(str(video_path))
@@ -23,8 +35,11 @@ fps = cap.get(cv2.CAP_PROP_FPS)
 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-# 测试 N 帧
-test_frames = 300
+# 测试帧数
+if args.duration is not None:
+    test_frames = int(args.duration * fps)
+else:
+    test_frames = total
 if test_frames > total:
     test_frames = total
 

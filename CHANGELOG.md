@@ -1,5 +1,49 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 09:50:00 (UTC+8)
+
+### chore: 新增测试资源参数化规则 — 禁止硬编码文件路径
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `.codebuddy/rules/test-resource-params.mdc` | 新建：测试资源文件必须通过参数传入，禁止硬编码 |
+| `.codebuddy/rules/sync-agent-md.mdc` | 补充 `test-resource-params` 子规则为触发条件 |
+| `AGENT.md` | 测试规范中增加「资源文件必须参数化」约定 |
+
+### 详细说明
+
+1. 动机：当前 5 个测试文件（`test_ball_tracking.py`、`test_ball_trajectory_e2e.py` 等）硬编码了 `input_video.mp4` 路径，无法在其他环境直接复用
+2. 规则要求：
+   - 脚本式测试使用 `argparse` 接收资源路径
+   - unittest 类测试通过参数传入，不存在的文件使用 `self.skipTest`
+   - 允许 `_DEFAULT_VIDEO` 仅作为 `__main__` 块的 fallback，且必须有命令行参数覆盖
+3. 同步将 `AGENT.md` 中的测试规范更新为包含此约定
+
+---
+
+## 2026-05-12 16:00:00 (UTC+8)
+
+### chore: 清理 _batch_detect 相关代码 — IoU 跟踪在 CPU 环境质量差
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | 删除 `_bbox_iou`、`_reset_batch_tracker`、`_batch_detect` 函数及全局跟踪器状态；删除 `BATCH_IOU_THRESHOLD` 常量 |
+| `app/pipeline/racket_tracking.py` | 删除 `_batch_racket_detect` 批量球拍检测函数 |
+| `tests/benchmark_batch_inference.py` | 删除（依赖已移除的 `_batch_detect`） |
+| `tests/benchmark_skip_frames.py` | 新增命令行参数支持：`<video_path> [--duration N]` |
+
+### 详细说明
+
+1. 原因：`_batch_detect` 使用 `model.predict()` + IoU 贪心匹配替代 `model.track()`，在 CPU 环境下：
+   - 加速仅 1.11x（批次推理在 CPU 上无实质收益）
+   - track ID 从 3 个暴增至 65 个（IoU 对小目标高速球无效）
+2. 当前最佳方案：保留 `model.track()` + `DETECTION_STEP=3` 帧跳跃，实测 3.1x 加速且跟踪稳定
+3. 基准测试脚本 `benchmark_skip_frames.py` 增加 `argparse` 支持命令行传参
+
+---
+
 ## 2026-05-12 15:45:00 (UTC+8)
 
 ### feat: 帧跳跃检测加速 — CPU 环境 3x 加速

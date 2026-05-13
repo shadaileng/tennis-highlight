@@ -39,40 +39,6 @@ def _get_racket_model():
     return _racket_model
 
 
-def _batch_racket_detect(frames: list[np.ndarray], model) -> list[Optional[dict]]:
-    """
-    批量检测球拍（一次 predict 处理多帧）
-
-    返回:
-        list[dict | None] — 每帧的球拍检测结果或 None
-    """
-    if not frames:
-        return []
-
-    results = model.predict(frames, conf=0.25, verbose=False)
-    detections: list[Optional[dict]] = []
-
-    for r in results:
-        if r.boxes is not None and len(r.boxes) > 0:
-            best_idx = np.argmax(r.boxes.conf.cpu().numpy())
-            box = r.boxes.xyxy[best_idx].cpu().numpy()
-            conf = float(r.boxes.conf[best_idx].cpu().numpy())
-
-            detections.append({
-                "x1": float(box[0]),
-                "y1": float(box[1]),
-                "x2": float(box[2]),
-                "y2": float(box[3]),
-                "conf": conf,
-                "cx": float((box[0] + box[2]) / 2),
-                "cy": float((box[1] + box[3]) / 2),
-            })
-        else:
-            detections.append(None)
-
-    return detections
-
-
 def detect_racket(frame: np.ndarray, model) -> Optional[dict]:
     """
     检测单帧中的球拍
