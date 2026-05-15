@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[float, str, float | None], None]
 
 BALL_ALGORITHM = "ball_tracking_yolo"
-BALL_ARTIFACT_VERSION = 6  # 增加 artifact 版本：新增球员检测与球速/跑动速度
+BALL_ARTIFACT_VERSION = 7  # 增加 artifact 版本：新增小场地坐标（ball_mini_coords, player_mini_coords）
 
 # 帧跳跃检测参数（CPU 环境：每 N 帧检测一帧，其余帧通过插值补全）
 DETECTION_STEP = 3  # 每 3 帧检测 1 帧，~3x 加速，由 _interpolate_ball_positions 补全
@@ -921,6 +921,10 @@ def analyze_ball_trajectory(
         artifact["court_keypoints"] = court_keypoints_list
     if court_coordinates is not None:
         artifact["court_coordinates"] = court_coordinates
+    if ball_mini_coords:
+        artifact["ball_mini_coords"] = ball_mini_coords
+    if player_mini_coords:
+        artifact["player_mini_coords"] = player_mini_coords
     if filtered_player_detections and any(filtered_player_detections):
         artifact["player_detections"] = filtered_player_detections
     if speed_events is not None:
@@ -953,6 +957,9 @@ def analyze_ball_trajectory(
             hit_moments=hit_moments,
             player_detections=filtered_player_detections if filtered_player_detections and any(filtered_player_detections) else None,
             speed_events=speed_events,
+            court_coordinates=court_coordinates,
+            ball_mini_coords=ball_mini_coords if ball_mini_coords else None,
+            player_mini_coords=player_mini_coords if player_mini_coords else None,
         )
         logger.info(f"Ball trajectory video saved to: {video_output_path}")
 

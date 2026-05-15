@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-15 17:20:00 (UTC+8)
+
+### feat: 新增迷你球场轨迹可视化和落地点标记
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | artifact 新增 `ball_mini_coords`、`player_mini_coords` 字段；`draw_ball_trajectory_video()` 传入小场地坐标；版本号升到 7 |
+| `app/pipeline/video_renderer.py` | 新增 `_detect_landing_points()`、`_init_landing_markers()`、`_draw_landing_markers()`、`_draw_mini_court_overlay()` 四个函数；主函数新增 `court_coordinates`/`ball_mini_coords`/`player_mini_coords` 参数；`render_ball_video_from_artifact()` 透传新参数 |
+
+### 详细说明
+
+1. **迷你球场轨迹可视化**：在视频右下角绘制半透明深色卡片 (280×340px)，卡片内显示迷你球场俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场并以彩色线条绘制，当前球位置以高亮圆点标记；多球跟踪时各球用不同颜色区分
+2. **落地点检测与标记**：基于球 Y 坐标轨迹的 Savgol 平滑 + find_peaks 检测局部 Y 极大值（图像中球最低点 ≈ 落地），过滤球场外落地；在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s 持续）+ 地面投影阴影
+3. **数据流**：`ball_tracking.py` 中的 `ball_mini_coords` 和 `player_mini_coords` 经 artifact 持久化，`video_renderer.py` 读取后用于渲染
+4. **预期效果**：渲染视频右下角出现 COURT VIEW 迷你球场面板，球落地时有黄色十字 + 扩散圆环的可视化标记
+
+---
+
 ## 2026-05-13 18:00:00 (UTC+8)
 
 ### feat: 新增 court_coordinates 字段到 artifact，记录球场坐标信息

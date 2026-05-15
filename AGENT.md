@@ -13,6 +13,7 @@
 | 后端框架 | FastAPI (Python 3.11+) |
 | 视频处理 | OpenCV (`opencv-python-headless`), ffmpeg |
 | ML 模型 | YOLOv5 (网球检测), YOLOv8 (球员检测), YOLOv8/YOLO11-pose (姿态检测), ResNet50 (场地关键点) |
+| 数据处理 | scipy (Savgol 滤波, find_peaks), pandas (DataFrame 分析) |
 | 数据库 | SQLite (`app/database.py` 管理) |
 | 前端 | 纯 JS + HTML + CSS (单页应用, 无框架) |
 | 测试 | `unittest` (Python) + `jsdom` (Node 前端测试) |
@@ -111,7 +112,7 @@ hit_moments: list[dict] = [
 artifact = {
     "metadata": {
         "detector": "ball_tracking_yolo",
-        "detector_version": 8,  # v8: 新增 court_coordinates 字段
+        "detector_version": 7,  # v7: 新增 ball_mini_coords, player_mini_coords 字段
         "model_path": "models/yolo5_last.pt",
         "video_width": int, "video_height": int,
         "video_fps": float, "duration_s": float,
@@ -192,6 +193,9 @@ artifact = {
             },
         },
     },
+    # v7 新增字段：
+    "ball_mini_coords": [{track_id: (x, y)}, ...],    # 逐帧球在小场地上的坐标
+    "player_mini_coords": [{track_id: (x, y)}, ...],  # 逐帧球员在小场地上的坐标
 }
 ```
 
@@ -214,12 +218,18 @@ def draw_ball_trajectory_video(
     progress_cb=None, hit_moments=None,
     player_detections=None,      # v6 新增
     speed_events=None,           # v6 新增
+    court_coordinates=None,      # v7 新增（含 mini_court_keypoints）
+    ball_mini_coords=None,       # v7 新增（小场地球坐标）
+    player_mini_coords=None,     # v7 新增（小场地球员坐标，保留扩展）
 ) -> Path
 ```
 
-渲染效果：
-- **球速文本**：击球后在击球点右上方显示青色渐变文本 "P{n} XX m/s"（n=球员ID），持续约 0.8 秒
-- **跑动连线**：在起点和终点之间画黄色连线，中点显示 "P{n} XX m/s"（n=球员ID），持续约 1.0 秒
+渲染效果（按绘制顺序）：
+1. **火花粒子**：击球点细长菱形飞出效果
+2. **球速文本**：击球后在击球点右上方显示青色渐变文本 "P{n} XX m/s"（n=球员ID），持续约 0.8 秒
+3. **跑动连线**：在起点和终点之间画黄色连线，中点显示 "P{n} XX m/s"（n=球员ID），持续约 1.0 秒
+4. **落地点标记**（v7 新增）：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
+5. **迷你球场**（v7 新增）：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
 
 ## 多球跟踪（feature/multi-ball-tracking 分支）
 

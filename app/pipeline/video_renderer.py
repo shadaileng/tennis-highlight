@@ -13,6 +13,8 @@ from typing import Callable, Optional
 
 import cv2
 import numpy as np
+import pandas as pd
+from scipy.signal import find_peaks, savgol_filter
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ _spark_effects: list[dict] = []
 # 球速/跑动速度叠加系统
 _ball_speed_overlays: list[dict] = []
 _player_speed_overlays: list[dict] = []
+
+# 落地点标记系统
+_landing_markers: list[dict] = []
 
 
 def _init_sparks(hit_moments: list[dict], video_fps: float):
@@ -416,6 +421,316 @@ def _draw_diamond(
         cv2.addWeighted(overlay, alpha * 0.7, frame, 1 - alpha * 0.7, 0, frame)
 
 
+def _detect_landing_points(
+    ball_detections: list[dict[int, list[float]]],
+    video_fps: float,
+    court_keypoints: list[float] | None = None,
+) -> list[dict]:
+    """
+    检测网球落地点（弹跳/撞地时刻）
+
+    算法：
+    1. 对每个 track_id 提取 Y 坐标轨迹
+    2. 平滑后寻找局部 Y 极大值（图像坐标系中球最低点 ≈ 落地）
+    3. 过滤：只在球场范围内、且连续落地间隔 > 15 帧
+
+    Args:
+        ball_detections: 逐帧球检测 [{track_id: [x1,y1,x2,y2]}, ...]
+        video_fps: 视频帧率
+        court_keypoints: 28 个场地关键点（用于过滤球场外落地）
+
+    Returns:
+        [{"frame_idx": int, "time_s": float, "ball_pos": (x, y),
+          "ball_center": (x, y), "track_id": int}, ...]
+    """
+    if not ball_detections:
+        return []
+
+    all_track_ids: set[int] = set()
+    for det in ball_detections:
+        all_track_ids.update(det.keys())
+    if not all_track_ids:
+        return []
+
+    landing_points = []
+
+    for track_id in all_track_ids:
+        positions: list[list[float]] = [
+            det.get(track_id, []) for det in ball_detections
+        ]
+        df = pd.DataFrame(positions, columns=["x1", "y1", "x2", "y2"])
+
+        # 提取中心点 Y 坐标
+        cy = (df["y1"] + df["y2"]) / 2
+        valid = cy.notna()
+        if valid.sum() < 10:
+            continue
+
+        # 平滑
+        y_vals = cy[valid].values.astype(float)
+        if len(y_vals) >= 7:
+            y_vals = savgol_filter(y_vals, window_length=7, polyorder=2)
+        elif len(y_vals) >= 5:
+            y_vals = savgol_filter(y_vals, window_length=5, polyorder=2)
+
+        # 找 Y 极大值（图像中最低点 = 落地）
+        peaks, props = find_peaks(y_vals, distance=15, prominence=5)
+
+        if len(peaks) == 0:
+            continue
+
+        # 映射回原始帧索引
+        valid_indices = np.where(valid)[0]
+        bounce_frames = [valid_indices[p] for p in peaks]
+
+        # 球场范围过滤
+        net_y = None
+        if court_keypoints and len(court_keypoints) >= 28:
+            net_y = (court_keypoints[25] + court_keypoints[27]) / 2.0
+
+        for bf_idx in bounce_frames:
+            if bf_idx >= len(ball_detections):
+                continue
+            ball_dict = ball_detections[bf_idx]
+            bbox = ball_dict.get(track_id)
+            if not bbox or len(bbox) < 4:
+                continue
+
+            cx = (bbox[0] + bbox[2]) / 2
+            cy_val = (bbox[1] + bbox[3]) / 2
+
+            # 过滤球场外落地（如果知道网线位置）
+            if net_y is not None:
+                if cy_val < net_y - 50:
+                    continue
+
+            landing_points.append({
+                "frame_idx": bf_idx,
+                "time_s": bf_idx / video_fps,
+                "ball_pos": (int(cx), int(cy_val)),
+                "ball_center": (cx, cy_val),
+                "track_id": track_id,
+            })
+
+    return landing_points
+
+
+def _init_landing_markers(landing_points: list[dict], video_fps: float):
+    """初始化落地点标记的视觉效果"""
+    global _landing_markers
+    _landing_markers = []
+
+    for lp in landing_points:
+        pos = lp.get("ball_pos", (0, 0))
+        frame_idx = lp["frame_idx"]
+
+        _landing_markers.append({
+            "frame_start": frame_idx,
+            "duration_frames": max(int(0.5 * video_fps), 1),
+            "x": pos[0],
+            "y": pos[1],
+        })
+
+    logger.info(f"Initialized {len(_landing_markers)} landing markers")
+
+
+def _draw_landing_markers(frame: np.ndarray, current_frame_idx: int) -> np.ndarray:
+    """在当前帧绘制落地点标记（地面冲击波 + 十字）"""
+    global _landing_markers
+
+    if not _landing_markers:
+        return frame
+
+    h, w = frame.shape[:2]
+
+    for marker in _landing_markers:
+        age = current_frame_idx - marker["frame_start"]
+        if age < 0 or age > marker["duration_frames"]:
+            continue
+
+        progress = age / marker["duration_frames"]
+        alpha = max(0, 1.0 - progress ** 1.5)
+        if alpha <= 0:
+            continue
+
+        cx, cy = int(marker["x"]), int(marker["y"])
+        if not (0 <= cx < w and 0 <= cy < h):
+            continue
+
+        # 冲击波圆环（从小到大扩散）
+        for i, (radius, r_alpha) in enumerate([
+            (12, alpha * 0.3),
+            (8, alpha * 0.5),
+            (5, alpha * 0.7),
+        ]):
+            overlay = frame.copy()
+            cv2.circle(overlay, (cx, cy), radius, (0, 200, 255), -1)
+            cv2.addWeighted(overlay, r_alpha, frame, 1 - r_alpha, 0, frame)
+
+        # 十字标记
+        cross_size = 8
+        color = (0, 255, 255)  # 黄色
+        int_alpha = int(255 * alpha)
+        cv2.line(frame, (cx - cross_size, cy), (cx + cross_size, cy),
+                 (color[0], color[1], color[2]), 2)
+        cv2.line(frame, (cx, cy - cross_size), (cx, cy + cross_size),
+                 (color[0], color[1], color[2]), 2)
+
+        # 外侧描边（白色高亮）
+        if alpha > 0.4:
+            cv2.line(frame, (cx - cross_size - 1, cy), (cx + cross_size + 1, cy),
+                     (255, 255, 255), 1)
+            cv2.line(frame, (cx, cy - cross_size - 1), (cx, cy + cross_size + 1),
+                     (255, 255, 255), 1)
+
+        # 底部阴影椭圆（模拟地面投影）
+        overlay = frame.copy()
+        cv2.ellipse(overlay, (cx, cy + 3), (22, 6), 0, 0, 360,
+                    (0, 0, 0), -1)
+        cv2.addWeighted(overlay, alpha * 0.3, frame, 1 - alpha * 0.3, 0, frame)
+
+    return frame
+
+
+def _draw_mini_court_overlay(
+    frame: np.ndarray,
+    current_frame_idx: int,
+    court_coordinates: dict,
+    ball_detections: list[dict[int, list[float]]],
+    ball_mini_coords: list[dict[int, tuple]],
+) -> np.ndarray:
+    """
+    在帧右下角绘制迷你球场轨迹可视化
+
+    绘制内容：
+    - 半透明深色背景卡片
+    - 迷你球场线条（基于 mini_court_keypoints）
+    - 球轨迹点（映射到小场地）
+    - 当前球位置亮点
+    """
+    h, w = frame.shape[:2]
+
+    mini_court_kps = court_coordinates.get("mini_court_keypoints", [])
+    if not mini_court_kps or not ball_mini_coords:
+        return frame
+
+    # 卡片位置：右下角
+    card_w = 280
+    card_h = 340
+    card_x1 = w - card_w - 15
+    card_y1 = h - card_h - 15
+    card_x2 = w - 15
+    card_y2 = h - 15
+
+    # 半透明背景卡片
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (card_x1, card_y1), (card_x2, card_y2), (28, 28, 28), -1)
+    cv2.rectangle(overlay, (card_x1, card_y1), (card_x2, card_y2), (80, 80, 80), 1)
+    cv2.addWeighted(overlay, 0.62, frame, 0.38, 0, frame)
+
+    # 标题
+    cv2.putText(frame, "COURT VIEW", (card_x1 + 10, card_y1 + 22),
+                cv2.FONT_HERSHEY_DUPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA)
+
+    # 计算迷你球场在卡片内的绘制区域
+    padding = 20
+    court_draw_x1 = card_x1 + padding
+    court_draw_y1 = card_y1 + 35
+    court_draw_x2 = card_x2 - padding
+    court_draw_y2 = card_y2 - padding
+    court_draw_w = court_draw_x2 - court_draw_x1
+    court_draw_h = court_draw_y2 - court_draw_y1
+
+    # 绘制球场网格线（使用 mini_court_keypoints 定义的关系）
+    # keypoints: 28 值 = 14 个点 (x0,y0)..(x13,y13)
+    if len(mini_court_kps) >= 28:
+        # 提取所有关键点
+        pts = [(mini_court_kps[i], mini_court_kps[i + 1]) for i in range(0, 28, 2)]
+
+        # 定义球场线连接关系
+        court_lines = [
+            (0, 2), (4, 5), (6, 7), (1, 3),   # 底线
+            (0, 1), (8, 9), (10, 11), (2, 3),  # 边线
+            (4, 6), (12, 13),                  # 中线/网
+        ]
+
+        # 获取所有参考点的边界
+        all_x = [p[0] for p in pts[:14]]
+        all_y = [p[1] for p in pts[:14]]
+        ref_min_x, ref_max_x = min(all_x), max(all_x)
+        ref_min_y, ref_max_y = min(all_y), max(all_y)
+        ref_w = max(ref_max_x - ref_min_x, 1)
+        ref_h = max(ref_max_y - ref_min_y, 1)
+
+        # 绘制场地线
+        for line_pair in court_lines:
+            p1 = pts[line_pair[0]]
+            p2 = pts[line_pair[1]]
+            if p1 and p2:
+                x1_n = int(court_draw_x1 + (p1[0] - ref_min_x) / ref_w * court_draw_w)
+                y1_n = int(court_draw_y1 + (p1[1] - ref_min_y) / ref_h * court_draw_h)
+                x2_n = int(court_draw_x1 + (p2[0] - ref_min_x) / ref_w * court_draw_w)
+                y2_n = int(court_draw_y1 + (p2[1] - ref_min_y) / ref_h * court_draw_h)
+                cv2.line(frame, (x1_n, y1_n), (x2_n, y2_n), (140, 140, 140), 1)
+
+        # 标记网线（更粗醒目）
+        if len(pts) > 13:
+            p12 = pts[12]
+            p13 = pts[13]
+            x12 = int(court_draw_x1 + (p12[0] - ref_min_x) / ref_w * court_draw_w)
+            y12 = int(court_draw_y1 + (p12[1] - ref_min_y) / ref_h * court_draw_h)
+            x13 = int(court_draw_x1 + (p13[0] - ref_min_x) / ref_w * court_draw_w)
+            y13 = int(court_draw_y1 + (p13[1] - ref_min_y) / ref_h * court_draw_h)
+            cv2.line(frame, (x12, y12), (x13, y13), (255, 200, 50), 2)
+            cv2.putText(frame, "NET", (x12, y12 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 200, 50), 1)
+
+        # 绘制球轨迹点
+        track_colors = [
+            (0, 255, 255), (255, 0, 0), (0, 255, 0),
+            (255, 0, 255), (255, 128, 0), (0, 128, 255),
+        ]
+
+        active_tracks: dict[int, list[tuple]] = {}
+        # 收集最近 60 帧的每个 track 的 mini-court 坐标
+        lookback = min(60, current_frame_idx)
+        for f_idx in range(max(0, current_frame_idx - lookback), current_frame_idx + 1):
+            if f_idx < len(ball_mini_coords):
+                for tid, pos in ball_mini_coords[f_idx].items():
+                    if pos and len(pos) >= 2 and pos != (0, 0):
+                        if tid not in active_tracks:
+                            active_tracks[tid] = []
+                        active_tracks[tid].append(pos)
+
+        for tid, coords in active_tracks.items():
+            color = track_colors[tid % len(track_colors)]
+
+            # 绘制轨迹线
+            for i in range(1, len(coords)):
+                p1 = coords[i - 1]
+                p2 = coords[i]
+                x1_m = int(court_draw_x1 + (p1[0] - ref_min_x) / ref_w * court_draw_w)
+                y1_m = int(court_draw_y1 + (p1[1] - ref_min_y) / ref_h * court_draw_h)
+                x2_m = int(court_draw_x1 + (p2[0] - ref_min_x) / ref_w * court_draw_w)
+                y2_m = int(court_draw_y1 + (p2[1] - ref_min_y) / ref_h * court_draw_h)
+                # 渐淡效果
+                t = i / len(coords)
+                alpha_t = 0.3 + t * 0.7
+                overlay = frame.copy()
+                cv2.line(overlay, (x1_m, y1_m), (x2_m, y2_m), color, 2)
+                cv2.addWeighted(overlay, alpha_t * 0.5, frame, 1 - alpha_t * 0.5, 0, frame)
+
+            # 当前球位置亮点
+            if coords:
+                last = coords[-1]
+                lx = int(court_draw_x1 + (last[0] - ref_min_x) / ref_w * court_draw_w)
+                ly = int(court_draw_y1 + (last[1] - ref_min_y) / ref_h * court_draw_h)
+                cv2.circle(frame, (lx, ly), 5, color, -1)
+                cv2.circle(frame, (lx, ly), 3, (255, 255, 255), -1)
+
+    return frame
+
+
 def draw_ball_trajectory_video(
     video_path: Path,
     ball_detections: list[dict[int, list[float]]],
@@ -426,6 +741,9 @@ def draw_ball_trajectory_video(
     hit_moments: list[dict] | None = None,
     player_detections: list[dict[int, list[float]]] | None = None,
     speed_events: dict | None = None,
+    court_coordinates: dict | None = None,
+    ball_mini_coords: list[dict[int, tuple]] | None = None,
+    player_mini_coords: list[dict[int, tuple]] | None = None,
 ) -> Path:
     """
     在原始视频上绘制网球轨迹并输出 MP4
@@ -442,6 +760,9 @@ def draw_ball_trajectory_video(
         hit_moments: 击球时刻列表（用于火花效果）
         player_detections: 逐帧球员检测框（用于球速文字定位）
         speed_events: 速度事件数据（含 ball_speeds, player_speeds）
+        court_coordinates: 球场坐标信息（含 mini_court_keypoints 用于迷你球场渲染）
+        ball_mini_coords: 逐帧球在小场地上的坐标 [{track_id: (x, y)}, ...]
+        player_mini_coords: 逐帧球员在小场地上的坐标（暂未使用，保留扩展）
 
     Returns:
         输出视频路径
@@ -505,6 +826,14 @@ def draw_ball_trajectory_video(
     if speed_events:
         _init_speed_overlays(speed_events, video_fps)
 
+    # 初始化落地点标记
+    landing_points = _detect_landing_points(
+        ball_detections, video_fps,
+        court_keypoints=court_coordinates.get("original_keypoints") if court_coordinates else None,
+    )
+    if landing_points:
+        _init_landing_markers(landing_points, video_fps)
+
     try:
         frame_idx = 0
 
@@ -520,6 +849,10 @@ def draw_ball_trajectory_video(
             # 绘制速度叠加（球速文本 + 跑动连线）
             if speed_events:
                 frame = _draw_speed_overlays(frame, frame_idx)
+
+            # 绘制落地点标记
+            if landing_points:
+                frame = _draw_landing_markers(frame, frame_idx)
 
             # 逐帧绘制检测结果
             if frame_idx < len(ball_detections):
@@ -579,6 +912,13 @@ def draw_ball_trajectory_video(
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, ball_color, 2)
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), ball_color, 2)
 
+            # 绘制迷你球场轨迹可视化（最上层）
+            if court_coordinates and ball_mini_coords:
+                frame = _draw_mini_court_overlay(
+                    frame, frame_idx, court_coordinates,
+                    ball_detections, ball_mini_coords,
+                )
+
             # 写入帧到 ffmpeg stdin
             proc.stdin.write(frame.tobytes())
             frame_idx += 1
@@ -622,6 +962,8 @@ def render_ball_video_from_artifact(
     hit_moments = artifact.get("hit_moments", [])
     player_detections = artifact.get("player_detections", None)
     speed_events = artifact.get("speed_events", None)
+    court_coordinates = artifact.get("court_coordinates", None)
+    ball_mini_coords = artifact.get("ball_mini_coords", None)
 
     return draw_ball_trajectory_video(
         video_path=video_path,
@@ -633,4 +975,6 @@ def render_ball_video_from_artifact(
         hit_moments=hit_moments if hit_moments else None,
         player_detections=player_detections,
         speed_events=speed_events,
+        court_coordinates=court_coordinates,
+        ball_mini_coords=ball_mini_coords,
     )
