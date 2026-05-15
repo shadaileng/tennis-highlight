@@ -763,6 +763,7 @@ def analyze_ball_trajectory(
 
     # --- 新增：球员过滤 + 小场地映射 + 速度计算 ---
     court_keypoints_list = None
+    court_coordinates = None
     speed_events = None
     filtered_player_detections = player_detections
     player_mini_coords = []
@@ -809,6 +810,27 @@ def analyze_ball_trajectory(
                     court_keypoints=court_keypoints_list,
                 )
 
+                # 构建球场坐标信息
+                drawing_kps = mini_court.get_court_drawing_keypoints()
+                court_coordinates = {
+                    "original_keypoints": court_keypoints_list,
+                    "mini_court_keypoints": drawing_kps,
+                    "mini_court_canvas": {
+                        "start_x": mini_court.start_x,
+                        "start_y": mini_court.start_y,
+                        "end_x": mini_court.end_x,
+                        "end_y": mini_court.end_y,
+                        "width": mini_court.court_drawing_width,
+                    },
+                    "dimensions_meters": {
+                        "single_line_width": 8.23,
+                        "double_line_width": 10.97,
+                        "half_court_line_height": 11.88,
+                        "service_line_width": 6.4,
+                        "double_ally_difference": 1.37,
+                        "no_mans_land_height": 5.48,
+                    },
+                }
         except Exception as e:
             logger.warning(f"Player/speed analysis failed (non-fatal): {e}")
             import traceback
@@ -897,6 +919,8 @@ def analyze_ball_trajectory(
     # 新增字段（仅在成功时添加）
     if court_keypoints_list is not None:
         artifact["court_keypoints"] = court_keypoints_list
+    if court_coordinates is not None:
+        artifact["court_coordinates"] = court_coordinates
     if filtered_player_detections and any(filtered_player_detections):
         artifact["player_detections"] = filtered_player_detections
     if speed_events is not None:

@@ -1,5 +1,22 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 18:00:00 (UTC+8)
+
+### feat: 新增 court_coordinates 字段到 artifact，记录球场坐标信息
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | `analyze_ball_trajectory` 构建 `court_coordinates`（原始关键点、小场地关键点、画布位置、场地尺寸）并写入 artifact |
+| `AGENT.md` | 更新 artifact 格式，新增 `court_coordinates` 字段说明；版本 v7→v8 |
+
+### 详细说明
+
+1. `court_coordinates` 包含：original_keypoints（原始帧14关键点）、mini_court_keypoints（小场地关键点位置）、mini_court_canvas（画布在视频帧中的位置）、dimensions_meters（球场实际尺寸常量）
+2. 验证：artifact 中正确生成完整球场坐标数据
+
+---
+
 ## 2026-05-13 17:30:00 (UTC+8)
 
 ### feat: 新增 players 汇总字段到 artifact，记录球员球速/跑动速度及统计

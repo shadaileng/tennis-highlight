@@ -111,7 +111,7 @@ hit_moments: list[dict] = [
 artifact = {
     "metadata": {
         "detector": "ball_tracking_yolo",
-        "detector_version": 7,  # v7: 新增 players 汇总字段
+        "detector_version": 8,  # v8: 新增 court_coordinates 字段
         "model_path": "models/yolo5_last.pt",
         "video_width": int, "video_height": int,
         "video_fps": float, "duration_s": float,
@@ -152,6 +152,24 @@ artifact = {
                 "end_pos": [x,y],        # 原始帧中的脚部结束位置
             },
         ],
+    },
+    # v8 新增字段：
+    "court_coordinates": {  # 球场坐标信息（可选，检测成功时存在）
+        "original_keypoints": [28个float],  # 14个场地关键点坐标 (x0,y0,x1,y1,...)
+        "mini_court_keypoints": [28个int],  # 14个关键点在小场地画布中的坐标
+        "mini_court_canvas": {  # 小场地画布在视频帧中的位置（右上角）
+            "start_x": int, "start_y": int,
+            "end_x": int, "end_y": int,
+            "width": int,               # 小场地绘制宽度（像素）
+        },
+        "dimensions_meters": {  # 球场实际尺寸（米）
+            "single_line_width": 8.23,
+            "double_line_width": 10.97,
+            "half_court_line_height": 11.88,
+            "service_line_width": 6.4,
+            "double_ally_difference": 1.37,
+            "no_mans_land_height": 5.48,
+        },
     },
     # v7 新增字段：
     "players": {  # 球员汇总数据（key 为 "player_{id}"）
