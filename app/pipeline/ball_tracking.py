@@ -415,9 +415,18 @@ def _calculate_speed_events(
             dist_m = (dist_px * DOUBLE_LINE_WIDTH) / mini_court_width
             ball_speed_ms = dist_m / duration_s
 
-            # 判断击球球员
+            # 判断击球球员：优先用球在原始图像中的位置相对网线判定
             player_positions = player_mini_coords[start_frame] if start_frame < len(player_mini_coords) else {}
-            hitter_id = _find_hitter_id(player_positions, ball_start)
+            ball_pos_orig = hit_moments[i].get("ball_pos", None)
+            if court_keypoints and ball_pos_orig and len(ball_pos_orig) >= 2 and far_player_id is not None:
+                net_y = (court_keypoints[25] + court_keypoints[27]) / 2.0
+                if ball_pos_orig[1] > net_y:
+                    hitter_id = near_player_id   # 球在网线下方 → 近端球员击球
+                else:
+                    hitter_id = far_player_id    # 球在网线上方 → 远端球员击球
+            else:
+                # 回退到 mini_court 距离判定
+                hitter_id = _find_hitter_id(player_positions, ball_start)
 
             hitter_bbox = []
             if start_frame < len(player_detections) and hitter_id and hitter_id in player_detections[start_frame]:
@@ -475,7 +484,16 @@ def _calculate_speed_events(
             ball_speed_ms = dist_m / duration_s
 
             player_positions = player_mini_coords[last_frame] if last_frame < len(player_mini_coords) else {}
-            hitter_id = _find_hitter_id(player_positions, ball_cur)
+            # 同样优先用网线判定
+            ball_pos_orig = hit_moments[-1].get("ball_pos", None)
+            if court_keypoints and ball_pos_orig and len(ball_pos_orig) >= 2 and far_player_id is not None:
+                net_y = (court_keypoints[25] + court_keypoints[27]) / 2.0
+                if ball_pos_orig[1] > net_y:
+                    hitter_id = near_player_id
+                else:
+                    hitter_id = far_player_id
+            else:
+                hitter_id = _find_hitter_id(player_positions, ball_cur)
 
             hitter_bbox = []
             if last_frame < len(player_detections) and hitter_id and hitter_id in player_detections[last_frame]:
@@ -496,6 +514,7 @@ def _calculate_speed_events(
     )
     return {
         "near_player_id": near_player_id,
+        "far_player_id": far_player_id,
         "ball_speeds": ball_speeds,
         "player_speeds": player_speeds,
     }
@@ -795,6 +814,49 @@ def analyze_ball_trajectory(
             import traceback
             logger.debug(traceback.format_exc())
 
+    # --- 构建球员汇总数据 ---
+    players = {}
+    if speed_events is not None:
+        near_player_id = speed_events.get("near_player_id")
+        far_player_id = speed_events.get("far_player_id")
+        ball_speeds = speed_events.get("ball_speeds", [])
+        player_speeds = speed_events.get("player_speeds", [])
+
+        # 收集所有球员 ID
+        all_player_ids = set()
+        if filtered_player_detections and any(filtered_player_detections):
+            for det in filtered_player_detections:
+                all_player_ids.update(det.keys())
+
+        for pid in sorted(all_player_ids):
+            if near_player_id is not None and pid == near_player_id:
+                role = "near"
+            elif far_player_id is not None and pid == far_player_id:
+                role = "far"
+            else:
+                role = "unknown"
+
+            player_ball_speeds = [bs for bs in ball_speeds if bs.get("hitter_id") == pid]
+            player_run_speeds = [ps for ps in player_speeds if ps.get("player_id") == pid]
+
+            ball_speed_vals = [bs["speed_ms"] for bs in player_ball_speeds if "speed_ms" in bs]
+            run_speed_vals = [ps["speed_ms"] for ps in player_run_speeds if "speed_ms" in ps]
+
+            players[f"player_{pid}"] = {
+                "player_id": pid,
+                "role": role,
+                "ball_speed_events": player_ball_speeds,
+                "running_speed_events": player_run_speeds,
+                "stats": {
+                    "ball_speed_max": max(ball_speed_vals) if ball_speed_vals else None,
+                    "ball_speed_avg": round(sum(ball_speed_vals) / len(ball_speed_vals), 1) if ball_speed_vals else None,
+                    "ball_speed_count": len(ball_speed_vals),
+                    "running_speed_max": max(run_speed_vals) if run_speed_vals else None,
+                    "running_speed_avg": round(sum(run_speed_vals) / len(run_speed_vals), 1) if run_speed_vals else None,
+                    "running_speed_count": len(run_speed_vals),
+                },
+            }
+
     # 计算检测统计
     valid_count = sum(1 for d in interpolated_detections if len(d) > 0)
     total_ball_instances = sum(len(d) for d in interpolated_detections)
@@ -839,6 +901,8 @@ def analyze_ball_trajectory(
         artifact["player_detections"] = filtered_player_detections
     if speed_events is not None:
         artifact["speed_events"] = speed_events
+        if players:
+            artifact["players"] = players
 
     # 保存 artifact
     settings.analysis_dir.mkdir(parents=True, exist_ok=True)

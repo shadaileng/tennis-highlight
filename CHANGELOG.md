@@ -1,5 +1,23 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-13 17:30:00 (UTC+8)
+
+### feat: 新增 players 汇总字段到 artifact，记录球员球速/跑动速度及统计
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | `_calculate_speed_events` 返回值新增 `far_player_id`；`analyze_ball_trajectory` 构建 `players` 汇总结构并写入 artifact |
+| `AGENT.md` | 更新 artifact 格式，新增 `players` 字段说明；修正 `speed_kmh` → `speed_ms`、版本 v6→v7 等遗留错误 |
+
+### 详细说明
+
+1. 新增 `players` 字段：按球员 ID 组织，每条记录包含 ball_speed_events（该球员的击球事件）、running_speed_events（该球员的跑动事件）、stats（最大/平均/次数统计）
+2. `_calculate_speed_events` 返回值新增 `far_player_id`，方便前端区分球员身份
+3. 验证：artifact 中正确生成 player_2（role=near, 3 次击球、4 次跑动）和 player_4（role=far, 2 次击球、2 次跑动）的数据
+
+---
+
 ## 2026-05-13 17:00:00 (UTC+8)
 
 ### fix: 球速文本添加球员标签 P{n}，解决远端显示混淆

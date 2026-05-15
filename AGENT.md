@@ -111,7 +111,7 @@ hit_moments: list[dict] = [
 artifact = {
     "metadata": {
         "detector": "ball_tracking_yolo",
-        "detector_version": 6,  # v6: 新增球员检测 + 球速/跑动速度
+        "detector_version": 7,  # v7: 新增 players 汇总字段
         "model_path": "models/yolo5_last.pt",
         "video_width": int, "video_height": int,
         "video_fps": float, "duration_s": float,
@@ -132,24 +132,47 @@ artifact = {
     "player_detections": [{track_id: [x1,y1,x2,y2]}, ...],  # 过滤后的2名球员检测框
     "speed_events": {  # 速度事件
         "near_player_id": int | None,  # 靠近镜头球员的 track_id
+        "far_player_id": int | None,   # 远离镜头球员的 track_id
         "ball_speeds": [
             {
                 "frame_idx": int,        # 击球帧
-                "speed_kmh": float,      # 球速 km/h
+                "speed_ms": float,       # 球速 m/s
                 "hitter_id": int,        # 击球球员的 track_id
                 "player_bbox": [x1,y1,x2,y2],  # 击球球员的边界框
+                "ball_pos": [x,y],       # 击球时球在原始帧中的位置
             },
         ],
         "player_speeds": [
             {
                 "start_frame": int,
                 "end_frame": int,
-                "speed_kmh": float,      # 跑动速度 km/h
+                "speed_ms": float,       # 跑动速度 m/s
                 "player_id": int,        # 跑动球员的 track_id
                 "start_pos": [x,y],      # 原始帧中的脚部起始位置
                 "end_pos": [x,y],        # 原始帧中的脚部结束位置
             },
         ],
+    },
+    # v7 新增字段：
+    "players": {  # 球员汇总数据（key 为 "player_{id}"）
+        "player_{id}": {
+            "player_id": int,        # 球员 track_id
+            "role": "near"|"far"|"unknown",  # 镜头侧身份
+            "ball_speed_events": [   # 该球员的击球事件（同 speed_events.ball_speeds 条目）
+                { "frame_idx": int, "speed_ms": float, "hitter_id": int, "player_bbox": [...], "ball_pos": [...] },
+            ],
+            "running_speed_events": [  # 该球员的跑动事件（同 speed_events.player_speeds 条目）
+                { "start_frame": int, "end_frame": int, "speed_ms": float, "player_id": int, "start_pos": [...], "end_pos": [...] },
+            ],
+            "stats": {
+                "ball_speed_max": float | None,   # 最大击球球速 m/s
+                "ball_speed_avg": float | None,   # 平均击球球速 m/s
+                "ball_speed_count": int,          # 击球次数
+                "running_speed_max": float | None, # 最大跑动速度 m/s
+                "running_speed_avg": float | None, # 平均跑动速度 m/s
+                "running_speed_count": int,        # 跑动速度采样次数
+            },
+        },
     },
 }
 ```
