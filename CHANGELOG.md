@@ -1,5 +1,29 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-15 21:30:00 (UTC+8)
+
+### feat: 近端球员骨骼关键点检测与渲染
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/ball_tracking.py` | 新增 `_extract_pose_detections()`、`_filter_pose_to_nearest_player()`、`_build_player_keypoints()` 三个辅助函数；主循环中集成 YOLO pose 模型逐检测帧提取骨骼；artifact 新增 `player_keypoints` 字段；版本号升至 8 |
+| `app/pipeline/video_renderer.py` | 新增 `_PLAYER_KEYS_EDGES` 常量、`_draw_player_skeleton()` 函数；主渲染循环中添加骨骼绘制层；渲染粒度保持一致（非检测帧延续上一帧骨骼） |
+
+### 详细说明
+
+1. **检测流程**：在 `analyze_ball_trajectory()` 主检测循环中，每 `DETECTION_STEP` 帧运行 YOLO pose 模型（yolo11n-pose.pt），提取所有人物 17 个 COCO 关键点
+2. **球员过滤**：确定 `near_player_id` 后，通过 `_filter_pose_to_nearest_player()` 从多人关键点中筛选出离近端球员 bbox 最近的一人，按帧索引构建 `frame_keypoints` 列表
+3. **数据格式**：`player_keypoints = {"near_player_id": int, "frame_keypoints": [None | {"keypoints": [[x,y,conf],...], "bbox": [...]}, ...]}`，坐标使用原始像素值
+4. **渲染效果**：
+   - **非检测帧**：使用上一帧有效骨骼延续显示（`_last_valid_pose` 缓存），避免闪烁
+   - **骨架连线**：白色发光外线（alpha 0.15）+ 青色主线（BGR: 0,255,200），基于 COCO 骨架 16 边定义
+   - **关键点**：外圈光晕 + 青色核心圆点 + 白色内芯
+   - **置信度过滤**：关键点置信度 < 0.2 跳过不绘制
+5. **预期效果**：渲染视频中近端球员身上叠加青色骨骼框架，持续稳定跟随
+
+---
+
 ## 2026-05-15 17:20:00 (UTC+8)
 
 ### feat: 新增迷你球场轨迹可视化和落地点标记

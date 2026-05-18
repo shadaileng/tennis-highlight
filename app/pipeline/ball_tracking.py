@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[float, str, float | None], None]
 
 BALL_ALGORITHM = "ball_tracking_yolo"
-BALL_ARTIFACT_VERSION = 7  # 增加 artifact 版本：新增小场地坐标（ball_mini_coords, player_mini_coords）
+BALL_ARTIFACT_VERSION = 8  # 增加 artifact 版本：新增 player_keypoints（近端球员骨骼关键点）
 
 # 帧跳跃检测参数（CPU 环境：每 N 帧检测一帧，其余帧通过插值补全）
 DETECTION_STEP = 3  # 每 3 帧检测 1 帧，~3x 加速，由 _interpolate_ball_positions 补全
@@ -611,6 +611,142 @@ def _measure_distance(p1, p2):
     return ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
 
 
+# YOLO 标准 17 个 COCO 关键点名称
+COCO_KEYPOINT_NAMES = [
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+]
+
+# 骨架连线定义（17 点 → 16 边）
+POSE_EDGES = [
+    (0, 1), (0, 2), (1, 3), (2, 4),       # 鼻子 → 眼睛 → 耳朵
+    (5, 6),                                 # 肩膀连线
+    (5, 7), (7, 9), (6, 8), (8, 10),       # 手臂
+    (5, 11), (6, 12), (11, 12),            # 躯干
+    (11, 13), (13, 15), (12, 14), (14, 16), # 腿
+]
+
+
+def _extract_pose_detections(result) -> list[dict]:
+    """
+    从 YOLO pose 结果提取所有人物的关键点数据（像素坐标）
+
+    Args:
+        result: YOLO predict 返回的 Results 对象
+
+    Returns:
+        [{"keypoints": [[x, y, conf], ...], "bbox": [x1, y1, x2, y2]}, ...]
+        17 个关键点，像素坐标；bbox 为像素坐标
+    """
+    boxes = result.boxes
+    kps = result.keypoints
+    if boxes is None or kps is None:
+        return []
+
+    xyxy = boxes.xyxy.cpu().numpy() if boxes.xyxy is not None else np.zeros((0, 4))
+    kxy = kps.xy.cpu().numpy() if kps.xy is not None else np.zeros((0, 17, 2))
+    kconf = kps.conf.cpu().numpy() if kps.conf is not None else np.zeros((0, 17))
+
+    detections = []
+    for i in range(len(xyxy)):
+        person_kps = []
+        for j in range(17):
+            person_kps.append([
+                float(kxy[i, j, 0]),
+                float(kxy[i, j, 1]),
+                float(kconf[i, j]) if kconf.ndim == 2 and j < kconf.shape[1] else 0.0,
+            ])
+        detections.append({
+            "keypoints": person_kps,
+            "bbox": [float(xyxy[i][0]), float(xyxy[i][1]),
+                     float(xyxy[i][2]), float(xyxy[i][3])],
+        })
+    return detections
+
+
+def _filter_pose_to_nearest_player(
+    pose_frame_detections: list[dict],
+    player_bbox: list[float],
+) -> dict | None:
+    """
+    从一帧的多人 pose 检测中，找出离目标球员最近的一个人
+
+    Args:
+        pose_frame_detections: _extract_pose_detections 的结果列表
+        player_bbox: 目标球员的 bbox [x1, y1, x2, y2]
+
+    Returns:
+        None 或 {"keypoints": [[x,y,conf],...], "bbox": [x1,y1,x2,y2]}
+    """
+    if not pose_frame_detections or not player_bbox:
+        return None
+
+    player_cx = (player_bbox[0] + player_bbox[2]) / 2
+    player_cy = (player_bbox[1] + player_bbox[3]) / 2
+
+    nearest = None
+    nearest_dist = float("inf")
+
+    for det in pose_frame_detections:
+        bbox = det["bbox"]
+        det_cx = (bbox[0] + bbox[2]) / 2
+        det_cy = (bbox[1] + bbox[3]) / 2
+        dist = _measure_distance((player_cx, player_cy), (det_cx, det_cy))
+        if dist < nearest_dist:
+            nearest_dist = dist
+            nearest = det
+
+    return nearest
+
+
+def _build_player_keypoints(
+    raw_pose_detections: list[dict | None],
+    player_detections: list[dict[int, list[float]]],
+    near_player_id: int,
+    total_frames: int,
+    detection_step: int,
+) -> list[dict | None]:
+    """
+    从原始逐帧 pose 检测中提取近端球员每帧的关键点
+
+    raw_pose_detections: 帧跳跃检测的 pose 数据，长度 = ceil(total_frames/step)
+    player_detections: 逐帧球员检测（与帧索引对齐）
+    near_player_id: 近端球员 track_id
+    total_frames: 总帧数
+    detection_step: 检测步长
+
+    Returns:
+        [None | {"keypoints": [[x,y,conf],...], "bbox": [x1,y1,x2,y2]}, ...]
+        长度与 total_frames 一致，非检测帧为 None
+    """
+    result = [None] * total_frames
+
+    for f_idx in range(total_frames):
+        if f_idx % detection_step != 0:
+            continue
+        det_idx = f_idx // detection_step  # 仅在检测帧索引范围内
+        if det_idx >= len(raw_pose_detections):
+            break
+        raw = raw_pose_detections[det_idx]
+        if raw is None or not raw:
+            continue
+
+        # 获取该帧球员 bbox
+        if f_idx >= len(player_detections):
+            break
+        player_bbox = player_detections[f_idx].get(near_player_id)
+        if not player_bbox or len(player_bbox) < 4:
+            continue
+
+        nearest = _filter_pose_to_nearest_player(raw, player_bbox)
+        if nearest is not None:
+            result[f_idx] = nearest
+
+    return result
+
+
 def analyze_ball_trajectory(
     analysis_id: str,
     video_path: Path,
@@ -660,6 +796,7 @@ def analyze_ball_trajectory(
     ball_detections: list[dict[int, list[float]]] = []
     player_detections: list[dict[int, list[float]]] = []
     racket_detections: list[dict | None] = []
+    pose_raw_detections: list[list[dict] | None] = []  # 逐检测帧的pose数据
     frame_idx = 0
     started = time.monotonic()
 
@@ -681,6 +818,15 @@ def analyze_ball_trajectory(
         logger.info("Player tracker loaded")
     except Exception as e:
         logger.warning(f"Player tracker not available: {e}")
+
+    # 尝试加载骨骼检测模型（YOLO pose）
+    pose_model = None
+    try:
+        from ultralytics import YOLO
+        pose_model = YOLO("yolo11n-pose.pt")
+        logger.info("YOLO pose model loaded")
+    except Exception as e:
+        logger.warning(f"Pose model not available: {e}")
 
     while frame_idx < num_target_frames:
         ret, frame = cap.read()
@@ -710,6 +856,17 @@ def analyze_ball_trajectory(
             racket_detections.append(racket)
         else:
             racket_detections.append(None)
+
+        # 骨骼检测（与球检测同步跳跃，仅检测底边球员）
+        if pose_model:
+            if frame_idx % DETECTION_STEP == 0:
+                pose_result = pose_model(frame, verbose=False)[0]
+                pose_raw = _extract_pose_detections(pose_result)
+            else:
+                pose_raw = None
+        else:
+            pose_raw = None
+        pose_raw_detections.append(pose_raw)
 
         frame_idx += 1
 
@@ -879,6 +1036,23 @@ def analyze_ball_trajectory(
                 },
             }
 
+    # --- 提取近端球员骨骼关键点 ---
+    player_keypoints = None
+    if pose_raw_detections and speed_events is not None:
+        near_player_id = speed_events.get("near_player_id")
+        if near_player_id is not None and filtered_player_detections and any(filtered_player_detections):
+            frame_kps = _build_player_keypoints(
+                pose_raw_detections, filtered_player_detections,
+                near_player_id, len(ball_detections), DETECTION_STEP,
+            )
+            if any(fk is not None for fk in frame_kps):
+                player_keypoints = {
+                    "near_player_id": near_player_id,
+                    "frame_keypoints": frame_kps,
+                }
+                logger.info(f"Extracted near player (id={near_player_id}) skeleton keypoints "
+                            f"for {sum(1 for fk in frame_kps if fk is not None)} frames")
+
     # 计算检测统计
     valid_count = sum(1 for d in interpolated_detections if len(d) > 0)
     total_ball_instances = sum(len(d) for d in interpolated_detections)
@@ -925,6 +1099,8 @@ def analyze_ball_trajectory(
         artifact["ball_mini_coords"] = ball_mini_coords
     if player_mini_coords:
         artifact["player_mini_coords"] = player_mini_coords
+    if player_keypoints is not None:
+        artifact["player_keypoints"] = player_keypoints
     if filtered_player_detections and any(filtered_player_detections):
         artifact["player_detections"] = filtered_player_detections
     if speed_events is not None:
@@ -960,6 +1136,7 @@ def analyze_ball_trajectory(
             court_coordinates=court_coordinates,
             ball_mini_coords=ball_mini_coords if ball_mini_coords else None,
             player_mini_coords=player_mini_coords if player_mini_coords else None,
+            player_keypoints=player_keypoints,
         )
         logger.info(f"Ball trajectory video saved to: {video_output_path}")
 

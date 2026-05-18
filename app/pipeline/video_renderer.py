@@ -731,6 +731,111 @@ def _draw_mini_court_overlay(
     return frame
 
 
+# ============================================================
+# 骨骼关键点渲染
+# ============================================================
+# COCO 关键点连接 (YOLO 17点标准)
+_POSE_EDGES = [
+    (0, 1), (0, 2), (1, 3), (2, 4),       # 鼻子→眼睛→耳朵
+    (5, 6),                                 # 肩膀
+    (5, 7), (7, 9), (6, 8), (8, 10),       # 手臂
+    (5, 11), (6, 12), (11, 12),            # 躯干
+    (11, 13), (13, 15), (12, 14), (14, 16), # 腿
+]
+
+_NUM_KEYPOINTS = 17
+
+# 缓存上一帧的有效骨骼数据（用于非检测帧的延续显示）
+_last_valid_pose: list[list[float]] | None = None
+
+
+def _draw_player_skeleton(
+    frame: np.ndarray,
+    player_keypoints: dict | None,
+    frame_idx: int,
+    video_fps: float,
+) -> np.ndarray:
+    """
+    在帧上绘制近端球员的骨骼关键点
+
+    Args:
+        frame: 视频帧
+        player_keypoints: artifact 中的 player_keypoints 字段
+        frame_idx: 当前帧索引
+        video_fps: 视频帧率
+
+    Returns:
+        绘制了骨骼的帧
+    """
+    global _last_valid_pose
+
+    if player_keypoints is None:
+        return frame
+
+    frame_kps_list = player_keypoints.get("frame_keypoints", [])
+    if not frame_kps_list:
+        return frame
+
+    # 获取当前帧的关键点数据
+    if frame_idx < len(frame_kps_list) and frame_kps_list[frame_idx] is not None:
+        kp_data = frame_kps_list[frame_idx]
+        _last_valid_pose = kp_data["keypoints"]
+    elif _last_valid_pose is not None:
+        # 非检测帧：使用上一帧的有效数据
+        kp_data = {"keypoints": _last_valid_pose}
+    else:
+        return frame
+
+    keypoints = kp_data["keypoints"]  # [[x, y, conf], ...]
+    if not keypoints or len(keypoints) < _NUM_KEYPOINTS:
+        return frame
+
+    h, w = frame.shape[:2]
+    skeleton_color = (0, 255, 200)  # 青色
+
+    # 绘制骨骼连线
+    for edge in _POSE_EDGES:
+        i1, i2 = edge
+        if i1 >= len(keypoints) or i2 >= len(keypoints):
+            continue
+        k1, k2 = keypoints[i1], keypoints[i2]
+        if k1[2] < 0.2 or k2[2] < 0.2:  # 置信度过低跳过
+            continue
+
+        x1, y1 = int(k1[0]), int(k1[1])
+        x2, y2 = int(k2[0]), int(k2[1])
+
+        if not (0 <= x1 < w and 0 <= y1 < h and 0 <= x2 < w and 0 <= y2 < h):
+            continue
+
+        # 发光外线
+        overlay = frame.copy()
+        cv2.line(overlay, (x1, y1), (x2, y2), (255, 255, 255), 5)
+        cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+
+        # 主线
+        cv2.line(frame, (x1, y1), (x2, y2), skeleton_color, 2)
+
+    # 绘制关键点圆圈
+    for kp in keypoints:
+        if kp[2] < 0.2:
+            continue
+        x, y = int(kp[0]), int(kp[1])
+        if not (0 <= x < w and 0 <= y < h):
+            continue
+
+        # 外圈光晕
+        overlay = frame.copy()
+        cv2.circle(overlay, (x, y), 6, (255, 255, 255), -1)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+
+        # 核心点
+        cv2.circle(frame, (x, y), 4, skeleton_color, -1)
+        cv2.circle(frame, (x, y), 2, (255, 255, 255), -1)
+
+    return frame
+
+
 def draw_ball_trajectory_video(
     video_path: Path,
     ball_detections: list[dict[int, list[float]]],
@@ -744,6 +849,7 @@ def draw_ball_trajectory_video(
     court_coordinates: dict | None = None,
     ball_mini_coords: list[dict[int, tuple]] | None = None,
     player_mini_coords: list[dict[int, tuple]] | None = None,
+    player_keypoints: dict | None = None,
 ) -> Path:
     """
     在原始视频上绘制网球轨迹并输出 MP4
@@ -763,6 +869,7 @@ def draw_ball_trajectory_video(
         court_coordinates: 球场坐标信息（含 mini_court_keypoints 用于迷你球场渲染）
         ball_mini_coords: 逐帧球在小场地上的坐标 [{track_id: (x, y)}, ...]
         player_mini_coords: 逐帧球员在小场地上的坐标（暂未使用，保留扩展）
+        player_keypoints: 近端球员骨骼关键点（v8 新增），用于绘制人物骨架
 
     Returns:
         输出视频路径
@@ -849,6 +956,10 @@ def draw_ball_trajectory_video(
             # 绘制速度叠加（球速文本 + 跑动连线）
             if speed_events:
                 frame = _draw_speed_overlays(frame, frame_idx)
+
+            # 绘制近端球员骨骼关键点
+            if player_keypoints:
+                frame = _draw_player_skeleton(frame, player_keypoints, frame_idx, video_fps)
 
             # 绘制落地点标记
             if landing_points:
@@ -964,6 +1075,7 @@ def render_ball_video_from_artifact(
     speed_events = artifact.get("speed_events", None)
     court_coordinates = artifact.get("court_coordinates", None)
     ball_mini_coords = artifact.get("ball_mini_coords", None)
+    player_keypoints = artifact.get("player_keypoints", None)
 
     return draw_ball_trajectory_video(
         video_path=video_path,
@@ -977,4 +1089,5 @@ def render_ball_video_from_artifact(
         speed_events=speed_events,
         court_coordinates=court_coordinates,
         ball_mini_coords=ball_mini_coords,
+        player_keypoints=player_keypoints,
     )
