@@ -630,6 +630,7 @@ function bindRangeControls() {
   const endText = $("start-range-end");
   const startSlider = $("start-range-start-slider");
   const endSlider = $("start-range-end-slider");
+  if (!startText || !endText || !startSlider || !endSlider) return;
   startSlider.addEventListener("input", () => {
     const end = parseFloat(endSlider.value || "0");
     if (parseFloat(startSlider.value) >= end) startSlider.value = Math.max(0, end - 0.5);
