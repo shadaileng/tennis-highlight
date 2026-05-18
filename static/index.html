@@ -136,11 +136,9 @@
       <div class="card">
         <div id="player-wrap">
           <video id="player" controls preload="metadata"></video>
-          <canvas id="pose-overlay"></canvas>
           <canvas id="ball-trail-canvas"></canvas>
         </div>
         <div class="player-controls">
-          <button id="play-all-on">Play all ON segments</button>
           <span id="player-time" class="muted">0:00 / 0:00</span>
         </div>
       </div>
@@ -150,30 +148,7 @@
         <div id="analysis-configs" class="config-list"></div>
       </div>
 
-      <div class="card" id="pose-panel" hidden>
-        <div class="row-between">
-          <h2>Pose Skeleton Data</h2>
-          <label class="muted"><input id="pose-overlay-toggle" type="checkbox" /> Show overlay</label>
-        </div>
-        <div id="pose-summary" class="muted"></div>
-        <div class="muted" style="margin-top: 6px">
-          Max Box Conf is the highest person-detection confidence in that sampled frame.
-          Avg Keypoint Conf is the average confidence of detected body landmarks.
-        </div>
-        <div id="pose-current" style="margin-top: 8px"></div>
-        <div id="pose-person-details" style="margin-top: 8px"></div>
-        <table class="sample-table" style="margin-top: 8px">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>People</th>
-              <th>Max Box Conf</th>
-              <th>Avg Keypoint Conf</th>
-            </tr>
-          </thead>
-          <tbody id="pose-frames-tbody"></tbody>
-        </table>
-      </div>
+
 
       <div class="card" id="ball-trail-panel" hidden>
         <div class="row-between">
@@ -198,69 +173,6 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="row-between">
-          <h2>Detector Experiment</h2>
-          <button id="reset-knobs-btn">Reset defaults</button>
-        </div>
-        <div id="analysis-summary" class="muted">No cached detector artifact loaded.</div>
-        <div class="knob-grid">
-          <label>
-            <span>diff_threshold</span>
-            <input id="knob-diff-threshold" type="number" min="0" max="255" step="1" />
-          </label>
-          <label>
-            <span>motion_threshold</span>
-            <input id="knob-motion-threshold" type="number" min="0" step="0.001" />
-          </label>
-          <label>
-            <span>merge_gap_s</span>
-            <span class="inline-control">
-              <input id="enable-merge-gap" type="checkbox" />
-              <input id="knob-merge-gap" type="number" min="0" step="0.1" />
-            </span>
-          </label>
-          <label>
-            <span>min_segment_s</span>
-            <span class="inline-control">
-              <input id="enable-min-segment" type="checkbox" />
-              <input id="knob-min-segment" type="number" min="0" step="0.1" />
-            </span>
-          </label>
-          <label>
-            <span>segment_padding_s</span>
-            <span class="inline-control">
-              <input id="enable-padding" type="checkbox" />
-              <input id="knob-segment-padding" type="number" min="0" step="0.1" />
-            </span>
-          </label>
-          <label class="readonly-knob">
-            <span>sample_fps</span>
-            <input id="knob-sample-fps" type="number" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>median_bg_samples</span>
-            <input id="knob-median-bg-samples" type="number" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>court_weight</span>
-            <input id="knob-court-weight" type="number" min="0" step="0.05" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>outside_weight</span>
-            <input id="knob-outside-weight" type="number" min="0" step="0.05" disabled />
-            <small>Re-analyze</small>
-          </label>
-          <label class="readonly-knob">
-            <span>near_camera_weight</span>
-            <input id="knob-near-camera-weight" type="number" min="0" step="0.05" disabled />
-            <small>Re-analyze</small>
-          </label>
-        </div>
-      </div>
 
       <div class="card">
         <div class="row-between">
@@ -276,7 +188,6 @@
               <th>End</th>
               <th>Duration</th>
               <th>Score</th>
-              <th>Samples</th>
               <th>Stage</th>
               <th>Actions</th>
             </tr>
@@ -284,7 +195,6 @@
           <tbody id="segments-tbody"></tbody>
         </table>
         <div class="row-between" style="margin-top: 12px">
-          <button id="add-segment-btn">+ Add segment at current time</button>
           <button id="export-btn" class="primary">Export Video</button>
         </div>
       </div>

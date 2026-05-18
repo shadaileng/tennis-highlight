@@ -62,61 +62,8 @@ input[type=number], input[type=text] {
   width: 80px;
 }
 
-.knob-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
-  margin-top: 14px;
-}
-.knob-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #57606a;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.knob-grid input[type=number] {
-  width: 100%;
-  font-size: 14px;
-  color: #1f2328;
-  text-transform: none;
-}
-.inline-control {
-  display: grid;
-  grid-template-columns: 22px 1fr;
-  align-items: center;
-  gap: 6px;
-}
-.readonly-knob small {
-  color: #8c959f;
-  font-size: 11px;
-  text-transform: none;
-  letter-spacing: 0;
-}
-.sample-row td {
-  background: #f6f8fa;
-  padding: 0;
-}
-.sample-table {
-  width: 100%;
-  margin: 0;
-  font-size: 12px;
-}
-.sample-table th, .sample-table td {
-  padding: 5px 10px;
-}
 .score-cell {
   font-variant-numeric: tabular-nums;
-}
-.pose-person-card {
-  border: 1px solid #eaeef2;
-  border-radius: 6px;
-  padding: 10px;
-  margin-top: 8px;
-  background: #f6f8fa;
 }
 
 #upload-progress { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
@@ -141,13 +88,6 @@ video {
 }
 #player-wrap {
   position: relative;
-}
-#pose-overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
 }
 #ball-trail-canvas {
   position: absolute;

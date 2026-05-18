@@ -158,51 +158,11 @@ class HelpTextCoverageTests(unittest.TestCase):
 class HtmlContractTests(unittest.TestCase):
     """Help dots and algorithm filtering reference real keys."""
 
-    def test_data_help_key_attributes_resolve_to_help_text(self):
-        help_keys = _help_text_keys(APP_JS)
-        used = set(re.findall(r'data-help-key="([^"]+)"', INDEX_HTML))
-        self.assertGreater(len(used), 0, "no data-help-key attributes found")
-        unknown = used - help_keys
-        self.assertEqual(
-            unknown,
-            set(),
-            f"data-help-key values without HELP_TEXT entries: {sorted(unknown)}",
-        )
-
-    def test_data_algorithms_reference_known_detectors(self):
-        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo", "ball_tracking_color"}
-        for match in re.finditer(r'data-algorithms="([^"]+)"', INDEX_HTML):
-            for algo in match.group(1).split():
-                with self.subTest(algorithm=algo):
-                    self.assertIn(
-                        algo,
-                        valid,
-                        f"data-algorithms references unknown detector '{algo}'",
-                    )
-
     def test_help_popover_div_present(self):
         self.assertIn(
             'id="help-popover"',
             INDEX_HTML,
             "missing #help-popover element required by the click-help handler",
-        )
-
-    def test_help_dot_select_dropdown_options_match_detectors(self):
-        # The <select id="start-algorithm"> options need to match
-        # DETECTOR_CONFIGS keys, otherwise switching the dropdown can put the
-        # form into a state where every label is hidden.
-        match = re.search(
-            r'<select[^>]*id="start-algorithm"[^>]*>(.*?)</select>',
-            INDEX_HTML,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        options = set(re.findall(r'value="([^"]+)"', match.group(1)))
-        valid = {"median_frame", "median_court_roi", "pose_skeleton_yolo", "ball_tracking_color"}
-        self.assertEqual(
-            options,
-            valid,
-            "start-algorithm options drifted from DETECTOR_CONFIGS keys",
         )
 
     def test_no_stray_title_attributes_left_on_help_dots(self):

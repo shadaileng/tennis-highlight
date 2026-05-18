@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-18 18:15:00 (UTC+8)
+
+### chore: 去除页面无用组件
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `static/index.html` | 移除 Detector Experiment 卡片、Pose Skeleton Data 卡片、"Play all ON segments" 按钮、"Add segment" 按钮、Samples 表头列、pose-overlay canvas |
+| `static/app.js` | 移除 detector experiment 全套（KNOB_IDS、renderKnobs、readKnobs、schedulePreview、applyPreviewKnobs 等）、pose 骨骼全套（renderPosePanel、renderPoseCurrent、drawPoseOverlay、POSE_EDGES、KEYPOINT_NAMES 等）、playNextOnSegment、renderSampleRow、add-segment-btn 事件监听；恢复 renderAnalysisConfigs |
+| `static/style.css` | 移除 .knob-grid、.inline-control、.readonly-knob、.sample-row、.pose-person-card、#pose-overlay 等无用样式 |
+| `tests/test_frontend_schemas.py` | 移除不再适用的测试方法（data-help-key、select dropdown 检测） |
+
+### 详细说明
+
+1. 做了什么：删除了页面中仅适用于 `median_frame`/`median_court_roi` 检测器的 UI 组件（当前只用 `ball_tracking_yolo`）；删除了 pose 骨骼面板（永远 hidden）；删除了 redundant 按钮和 Stats 展开功能；清理了死 CSS。
+2. 预期效果：JS 代码量减少约 900 行（约 35%），页面更加简洁专注。
+
+---
+
 ## 2026-05-18 18:00:00 (UTC+8)
 
 ### refactor: Render Pipeline 拆分 + 前端勾选框控制
@@ -21,6 +40,7 @@
 2. 每个 Pass 可独立开关：通过 `render_options` 字典控制（`ball_trail`、`ball_speed`、`running_speed`、`skeleton`、`spark`）
 3. 前端 Media Pool 界面不再有 Algorithm 下拉框，改为 5 个勾选框 + 范围起止输入
 4. 所有检测仍然全量运行（保持 artifact 数据完整性），渲染时按勾选状态过滤
+5. 修复：`bindRangeControls` 添加 null 保护，避免 DOM 未就绪时报 `addEventListener` 错误
 
 ---
 

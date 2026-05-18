@@ -8,14 +8,11 @@ const state = {
   analyses: [],
   pollingAnalyses: false,
   analysis: null,
-  poseData: null,
   knobs: null,
   defaultKnobs: null,
-  expandedSegments: new Set(),
   videoUrl: null,
-  playMode: "free", // "free" | "segment" | "all_on"
-  segmentEndS: null, // when in segment/all_on mode, auto-pause/skip at this time
-  allOnQueue: [], // remaining ON segments to play through in "all_on" mode
+  playMode: "free", // "free" | "segment"
+  segmentEndS: null, // when in segment mode, auto-pause at this time
   calibrationVideoId: null,
   calibrationPoints: [],
   ballTrajectory: [],
@@ -359,18 +356,16 @@ async function pollBallAnalysis(ballAnalysisId, videoId) {
     
     if (ball) {
       if (ball.status === "done") {
-        // Ball analysis done, now create a dummy analysis entry for the editor
+        // Ball analysis done
         sessionStorage.setItem("ballAnalysisVideoId", videoId);
         sessionStorage.setItem("ballAnalysisId", ballAnalysisId);
         
-        // Find the media and create a synthetic analysis entry
         const media = state.media.find(m => m.video_id === videoId);
         if (media) {
           state.videoId = videoId;
           state.analysisId = ballAnalysisId;
           state.duration = media.duration_s || 0;
           
-          // Create a minimal segments array (full video)
           state.segments = [{
             start_s: 0,
             end_s: media.duration_s || 0,
@@ -379,7 +374,6 @@ async function pollBallAnalysis(ballAnalysisId, videoId) {
             decision_stage: "ball_analysis",
           }];
           
-          // Load the editor with ball trajectory data
           await loadEditorWithBallTrajectory(videoId, ballAnalysisId);
         }
         await refreshLibrary();
@@ -816,20 +810,13 @@ async function loadEditor() {
   state.segments = segR.segments.map((s) => ({ ...s }));
   state.videoUrl = videoUrl;
   state.analysis = analysisR;
-  state.poseData = null;
-  if (analysisR && analysisR.metadata && analysisR.metadata.detector === "pose_skeleton_yolo") {
-    state.poseData = await fetch(`/pose-data/${state.analysisId}`).then((r) => r.ok ? r.json() : null);
-  }
   state.knobs = analysisR ? { ...analysisR.knobs } : null;
   state.defaultKnobs = analysisR ? { ...analysisR.defaults } : null;
-  state.expandedSegments = new Set();
 
   $("player").src = state.videoUrl;
   showOnly("editor-section");
-  renderKnobs();
   renderAnalysisConfigs();
   renderAll();
-  renderPosePanel();
   setupCanvas();
   setupPlayer();
   loadBallTrajectory();
@@ -839,8 +826,6 @@ function renderAll() {
   drawTimeline();
   renderTable();
   renderSummary();
-  renderAnalysisSummary();
-  renderPosePanel();
 }
 
 function renderSummary() {
@@ -881,21 +866,10 @@ function renderTable() {
     scoreTd.className = "score-cell";
     scoreTd.textContent = formatScore(seg);
 
-    const samplesTd = document.createElement("td");
-    samplesTd.textContent = typeof seg.sample_count === "number" ? seg.sample_count : "—";
-
     const stageTd = document.createElement("td");
     stageTd.textContent = seg.decision_stage || "manual";
 
     const actTd = document.createElement("td");
-    const statsBtn = document.createElement("button");
-    statsBtn.textContent = state.expandedSegments.has(i) ? "Stats ▴" : "Stats ▾";
-    statsBtn.disabled = !(seg.samples && seg.samples.length);
-    statsBtn.addEventListener("click", () => {
-      if (state.expandedSegments.has(i)) state.expandedSegments.delete(i);
-      else state.expandedSegments.add(i);
-      renderTable();
-    });
     const playBtn = document.createElement("button");
     playBtn.textContent = "▶ Preview";
     playBtn.addEventListener("click", () => playSegment(i));
@@ -907,15 +881,11 @@ function renderTable() {
       state.segments.splice(i, 1);
       renderAll();
     });
-    actTd.appendChild(statsBtn);
     actTd.appendChild(playBtn);
     actTd.appendChild(delBtn);
 
-    tr.append(idxTd, onTd, startTd, endTd, durTd, scoreTd, samplesTd, stageTd, actTd);
+    tr.append(idxTd, onTd, startTd, endTd, durTd, scoreTd, stageTd, actTd);
     tbody.appendChild(tr);
-    if (state.expandedSegments.has(i)) {
-      tbody.appendChild(renderSampleRow(seg));
-    }
   });
 }
 
@@ -925,42 +895,6 @@ function formatScore(seg) {
   const avg = seg.avg_score.toFixed(3);
   const max = typeof seg.max_score === "number" ? seg.max_score.toFixed(3) : "—";
   return `${avg} (${min}-${max})`;
-}
-
-function renderSampleRow(seg) {
-  const tr = document.createElement("tr");
-  tr.className = "sample-row";
-  const td = document.createElement("td");
-  td.colSpan = 9;
-  const table = document.createElement("table");
-  table.className = "sample-table";
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Foreground</th>
-        <th>Smoothed</th>
-        <th>Threshold</th>
-        <th>Final</th>
-      </tr>
-    </thead>
-  `;
-  const body = document.createElement("tbody");
-  for (const sample of (seg.samples || [])) {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${fmtPrecise(sample.time_s)}</td>
-      <td>${Number(sample.foreground_ratio).toFixed(4)}</td>
-      <td>${Number(sample.smoothed_score).toFixed(4)}</td>
-      <td>${sample.threshold_result ? "ON" : "OFF"}</td>
-      <td>${seg.is_on ? "ON" : "OFF"}</td>
-    `;
-    body.appendChild(row);
-  }
-  table.appendChild(body);
-  td.appendChild(table);
-  tr.appendChild(td);
-  return tr;
 }
 
 function numericCell(seg, field, idx) {
@@ -996,76 +930,6 @@ function parseTime(str) {
   return isNaN(n) ? null : n;
 }
 
-// Detector experiment -----------------------------------------------------
-let knobTimer = null;
-let renderingKnobs = false;
-
-const KNOB_IDS = {
-  diff_threshold: "knob-diff-threshold",
-  motion_threshold: "knob-motion-threshold",
-  merge_gap_s: "knob-merge-gap",
-  min_segment_s: "knob-min-segment",
-  segment_padding_s: "knob-segment-padding",
-  sample_fps: "knob-sample-fps",
-  median_bg_samples: "knob-median-bg-samples",
-  court_weight: "knob-court-weight",
-  outside_weight: "knob-outside-weight",
-  near_camera_weight: "knob-near-camera-weight",
-  enable_merge_gap: "enable-merge-gap",
-  enable_min_segment: "enable-min-segment",
-  enable_padding: "enable-padding",
-};
-
-function renderKnobs() {
-  renderingKnobs = true;
-  const knobs = state.knobs || state.defaultKnobs;
-  const isPose = state.analysis && state.analysis.metadata && state.analysis.metadata.detector === "pose_skeleton_yolo";
-  const disabled = isPose || !knobs || !(state.analysis && state.analysis.metadata);
-  for (const [key, id] of Object.entries(KNOB_IDS)) {
-    const el = $(id);
-    if (!el) continue;
-    if (el.type === "checkbox") {
-      el.checked = !!(knobs && knobs[key]);
-      el.disabled = disabled;
-    } else {
-      el.value = knobs && knobs[key] !== undefined ? knobs[key] : "";
-      el.disabled = disabled || key === "sample_fps" || key === "median_bg_samples" ||
-        key === "court_weight" || key === "outside_weight" || key === "near_camera_weight";
-    }
-  }
-  renderingKnobs = false;
-}
-
-function readKnobs() {
-  const base = { ...(state.knobs || state.defaultKnobs || {}) };
-  base.diff_threshold = parseInt($("knob-diff-threshold").value || base.diff_threshold || 25, 10);
-  base.motion_threshold = parseFloat($("knob-motion-threshold").value || base.motion_threshold || 0.02);
-  base.merge_gap_s = parseFloat($("knob-merge-gap").value || base.merge_gap_s || 0);
-  base.min_segment_s = parseFloat($("knob-min-segment").value || base.min_segment_s || 0);
-  base.segment_padding_s = parseFloat($("knob-segment-padding").value || base.segment_padding_s || 0);
-  base.enable_merge_gap = $("enable-merge-gap").checked;
-  base.enable_min_segment = $("enable-min-segment").checked;
-  base.enable_padding = $("enable-padding").checked;
-  base.court_weight = parseFloat($("knob-court-weight").value || base.court_weight || 1);
-  base.outside_weight = parseFloat($("knob-outside-weight").value || base.outside_weight || 0.15);
-  base.near_camera_weight = parseFloat($("knob-near-camera-weight").value || base.near_camera_weight || 0);
-  return base;
-}
-
-function renderAnalysisSummary() {
-  const el = $("analysis-summary");
-  if (!el) return;
-  if (!(state.analysis && state.analysis.metadata)) {
-    el.textContent = "No cached detector artifact for this analysis. Start a new analysis run to enable instant knob tuning.";
-    return;
-  }
-  const s = state.analysis.summary || {};
-  const changed = typeof s.changed_segment_count === "number" ? ` • ${s.changed_segment_count} changed` : "";
-  el.textContent =
-    `${s.on_count || 0} ON • ${fmt(s.on_duration_s || 0)} kept ` +
-    `(${Math.round(s.on_percent || 0)}%) • ${s.sample_count || 0} cached samples${changed}`;
-}
-
 function renderAnalysisConfigs() {
   const root = $("analysis-configs");
   if (!root) return;
@@ -1074,18 +938,7 @@ function renderAnalysisConfigs() {
     ...(state.analysis && state.analysis.knobs ? state.analysis.knobs : {}),
     ...(state.analysis && state.analysis.summary && state.analysis.summary.config ? state.analysis.summary.config : {}),
   };
-  if (state.poseData && state.poseData.metadata) {
-    Object.assign(config, {
-      pose_model: state.poseData.metadata.model_name,
-      pose_conf: state.poseData.metadata.conf_threshold,
-      pose_imgsz: state.poseData.metadata.image_size,
-      sample_fps: state.poseData.metadata.sample_fps,
-      range_start_s: state.poseData.metadata.range_start_s,
-      range_end_s: state.poseData.metadata.range_end_s,
-    });
-  }
   // Filter pills to only those keys the detector actually uses.
-  // Unknown detector → fall back to showing everything (forward compatible).
   const detector =
     (state.analysis && state.analysis.detector) ||
     (state.analysis && state.analysis.algorithm) ||
@@ -1106,182 +959,6 @@ function renderAnalysisConfigs() {
     root.appendChild(pill);
   }
 }
-
-function renderPosePanel() {
-  const panel = $("pose-panel");
-  if (!panel) return;
-  if (!state.poseData) {
-    panel.hidden = true;
-    drawPoseOverlay();
-    return;
-  }
-  panel.hidden = false;
-  const summary = state.poseData.summary || {};
-  $("pose-summary").textContent =
-    `${summary.sample_count || 0} sampled frames • ` +
-    `${summary.frames_with_poses || 0} with poses • ` +
-    `${Number(summary.avg_detections_per_frame || 0).toFixed(2)} people/frame • ` +
-    `avg keypoint confidence ${summary.avg_keypoint_confidence == null ? "—" : Number(summary.avg_keypoint_confidence).toFixed(2)}`;
-  renderPoseCurrent();
-}
-
-function nearestPoseFrame(t) {
-  const frames = state.poseData ? state.poseData.frames || [] : [];
-  if (!frames.length) return null;
-  let best = frames[0];
-  let bestDist = Math.abs(best.time_s - t);
-  for (const frame of frames) {
-    const dist = Math.abs(frame.time_s - t);
-    if (dist < bestDist) {
-      best = frame;
-      bestDist = dist;
-    }
-  }
-  return best;
-}
-
-function renderPoseCurrent() {
-  if (!state.poseData) return;
-  const player = $("player");
-  const t = player ? player.currentTime || 0 : 0;
-  const nearest = nearestPoseFrame(t);
-  $("pose-current").textContent = nearest
-    ? `Nearest pose frame: ${fmtPrecise(nearest.time_s)} • ${nearest.detections.length} people`
-    : "No pose frames.";
-  renderPosePersonDetails(nearest);
-  const tbody = $("pose-frames-tbody");
-  tbody.innerHTML = "";
-  const frames = state.poseData.frames || [];
-  const nearby = frames
-    .map((f) => ({ ...f, dist: Math.abs(f.time_s - t) }))
-    .sort((a, b) => a.dist - b.dist)
-    .slice(0, 12)
-    .sort((a, b) => a.time_s - b.time_s);
-  for (const frame of nearby) {
-    const row = document.createElement("tr");
-    const confs = frame.detections.map((d) => d.confidence || 0);
-    const kp = [];
-    frame.detections.forEach((d) => (d.keypoints || []).forEach((p) => kp.push(p.confidence || 0)));
-    row.innerHTML = `
-      <td>${fmtPrecise(frame.time_s)}</td>
-      <td>${frame.detections.length}</td>
-      <td>${confs.length ? Math.max(...confs).toFixed(2) : "—"}</td>
-      <td>${kp.length ? (kp.reduce((a, b) => a + b, 0) / kp.length).toFixed(2) : "—"}</td>
-    `;
-    tbody.appendChild(row);
-  }
-  drawPoseOverlay();
-}
-
-const KEYPOINT_NAMES = [
-  "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-  "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-  "left_wrist", "right_wrist", "left_hip", "right_hip",
-  "left_knee", "right_knee", "left_ankle", "right_ankle",
-];
-
-function renderPosePersonDetails(frame) {
-  const root = $("pose-person-details");
-  root.innerHTML = "";
-  if (!frame || !frame.detections.length) {
-    root.textContent = "No person skeletons detected for the nearest sampled frame.";
-    return;
-  }
-  frame.detections.forEach((det, idx) => {
-    const box = det.box || {};
-    const visible = (det.keypoints || []).filter((p) => (p.confidence || 0) >= 0.2);
-    const card = document.createElement("div");
-    card.className = "pose-person-card";
-    const title = document.createElement("div");
-    title.innerHTML =
-      `<strong>Person ${idx + 1}</strong> ` +
-      `box conf ${Number(det.confidence || 0).toFixed(2)} • ` +
-      `visible keypoints ${visible.length}/${(det.keypoints || []).length} • ` +
-      `box [${fmtNorm(box.x1)}, ${fmtNorm(box.y1)} → ${fmtNorm(box.x2)}, ${fmtNorm(box.y2)}]`;
-    card.appendChild(title);
-
-    const table = document.createElement("table");
-    table.className = "sample-table";
-    table.innerHTML = `
-      <thead>
-        <tr>
-          <th>Keypoint</th>
-          <th>x</th>
-          <th>y</th>
-          <th>Conf</th>
-        </tr>
-      </thead>
-    `;
-    const body = document.createElement("tbody");
-    for (const kp of det.keypoints || []) {
-      const row = document.createElement("tr");
-      row.innerHTML = `
-        <td>${KEYPOINT_NAMES[kp.index] || `kp_${kp.index}`}</td>
-        <td>${fmtNorm(kp.x)}</td>
-        <td>${fmtNorm(kp.y)}</td>
-        <td>${Number(kp.confidence || 0).toFixed(2)}</td>
-      `;
-      body.appendChild(row);
-    }
-    table.appendChild(body);
-    card.appendChild(table);
-    root.appendChild(card);
-  });
-}
-
-function fmtNorm(v) {
-  return typeof v === "number" && isFinite(v) ? v.toFixed(3) : "—";
-}
-
-function schedulePreview() {
-  if (
-    renderingKnobs ||
-    !(state.analysis && state.analysis.metadata) ||
-    state.analysis.metadata.detector === "pose_skeleton_yolo"
-  ) return;
-  clearTimeout(knobTimer);
-  knobTimer = setTimeout(applyPreviewKnobs, 250);
-}
-
-async function applyPreviewKnobs() {
-  const knobs = readKnobs();
-  try {
-    const r = await fetch(`/analysis/${state.analysisId}/preview`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ knobs }),
-    });
-    if (!r.ok) throw new Error(await r.text());
-    const data = await r.json();
-    state.knobs = { ...data.knobs };
-    state.segments = data.segments.map((s) => ({ ...s }));
-    state.analysis = {
-      ...(state.analysis || {}),
-      knobs: data.knobs,
-      summary: data.summary,
-    };
-    state.expandedSegments = new Set();
-    renderKnobs();
-    renderAll();
-  } catch (e) {
-    $("analysis-summary").textContent = "Preview failed: " + e.message;
-  }
-}
-
-for (const id of Object.values(KNOB_IDS)) {
-  const el = $(id);
-  if (el && !el.disabled) {
-    el.addEventListener("input", schedulePreview);
-    el.addEventListener("change", schedulePreview);
-  }
-}
-
-$("reset-knobs-btn").addEventListener("click", () => {
-  if (!state.defaultKnobs) return;
-  state.knobs = { ...state.defaultKnobs };
-  renderKnobs();
-  applyPreviewKnobs();
-});
 
 // Timeline canvas ---------------------------------------------------------
 let canvas, ctx;
@@ -1361,7 +1038,6 @@ function setupPlayer() {
   const player = $("player");
   player.addEventListener("timeupdate", () => {
     drawTimeline();
-    renderPoseCurrent();
     drawBallTrail();
     $("player-time").textContent = `${fmt(player.currentTime)} / ${fmt(state.duration)}`;
 
@@ -1371,59 +1047,9 @@ function setupPlayer() {
         state.playMode = "free";
         state.segmentEndS = null;
       }
-    } else if (state.playMode === "all_on" && state.segmentEndS !== null) {
-      if (player.currentTime >= state.segmentEndS) {
-        playNextOnSegment();
-      }
     }
   });
 }
-
-const POSE_EDGES = [
-  [5, 7], [7, 9], [6, 8], [8, 10], [5, 6],
-  [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
-  [0, 1], [0, 2], [1, 3], [2, 4],
-];
-
-function drawPoseOverlay() {
-  const canvas = $("pose-overlay");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const video = $("player");
-  const rect = video.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, rect.width * dpr);
-  canvas.height = Math.max(1, rect.height * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-  if (!state.poseData || !$("pose-overlay-toggle").checked) return;
-  const frame = nearestPoseFrame(video.currentTime || 0);
-  if (!frame || Math.abs(frame.time_s - (video.currentTime || 0)) > 1.0) return;
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  ctx.lineWidth = 2;
-  for (const det of frame.detections || []) {
-    const pts = det.keypoints || [];
-    ctx.strokeStyle = "#f2cc60";
-    for (const [a, b] of POSE_EDGES) {
-      const pa = pts[a], pb = pts[b];
-      if (!pa || !pb || pa.confidence < 0.2 || pb.confidence < 0.2) continue;
-      ctx.beginPath();
-      ctx.moveTo(pa.x * w, pa.y * h);
-      ctx.lineTo(pb.x * w, pb.y * h);
-      ctx.stroke();
-    }
-    ctx.fillStyle = "#cf222e";
-    for (const p of pts) {
-      if (p.confidence < 0.2) continue;
-      ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-}
-
-$("pose-overlay-toggle").addEventListener("change", drawPoseOverlay);
 
 // Ball Trail --------------------------------------------------------------
 
@@ -1644,41 +1270,6 @@ function playSegment(i) {
   state.segmentEndS = seg.end_s;
   player.play();
 }
-
-function playNextOnSegment() {
-  const player = $("player");
-  if (state.allOnQueue.length === 0) {
-    player.pause();
-    state.playMode = "free";
-    state.segmentEndS = null;
-    return;
-  }
-  const seg = state.allOnQueue.shift();
-  player.currentTime = seg.start_s;
-  state.segmentEndS = seg.end_s;
-  player.play();
-}
-
-$("play-all-on").addEventListener("click", () => {
-  state.allOnQueue = state.segments.filter((s) => s.is_on).map((s) => ({ ...s }));
-  state.playMode = "all_on";
-  playNextOnSegment();
-});
-
-// Add segment at current time --------------------------------------------
-$("add-segment-btn").addEventListener("click", () => {
-  const t = $("player").currentTime || 0;
-  const newSeg = {
-    start_s: Math.max(0, t),
-    end_s: Math.min(state.duration, t + 5),
-    is_on: true,
-    source: "manual",
-    decision_stage: "manual",
-  };
-  state.segments.push(newSeg);
-  state.segments.sort((a, b) => a.start_s - b.start_s);
-  renderAll();
-});
 
 // Export ------------------------------------------------------------------
 $("export-btn").addEventListener("click", async () => {
