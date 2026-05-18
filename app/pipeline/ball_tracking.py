@@ -726,10 +726,9 @@ def _build_player_keypoints(
     for f_idx in range(total_frames):
         if f_idx % detection_step != 0:
             continue
-        det_idx = f_idx // detection_step  # 仅在检测帧索引范围内
-        if det_idx >= len(raw_pose_detections):
+        if f_idx >= len(raw_pose_detections):
             break
-        raw = raw_pose_detections[det_idx]
+        raw = raw_pose_detections[f_idx]
         if raw is None or not raw:
             continue
 
@@ -743,6 +742,41 @@ def _build_player_keypoints(
         nearest = _filter_pose_to_nearest_player(raw, player_bbox)
         if nearest is not None:
             result[f_idx] = nearest
+
+    # --- 线性插值补全非检测帧的关键点 ---
+    detected_indices = [i for i, v in enumerate(result) if v is not None]
+    if len(detected_indices) >= 2:
+        for idx in range(len(detected_indices) - 1):
+            i_left = detected_indices[idx]
+            i_right = detected_indices[idx + 1]
+            gap = i_right - i_left
+            if gap <= 1:
+                continue
+            kps_left = result[i_left]["keypoints"]
+            kps_right = result[i_right]["keypoints"]
+            if len(kps_left) != len(kps_right):
+                continue
+            for mid_idx in range(i_left + 1, i_right):
+                t = (mid_idx - i_left) / gap
+                interp_kps = []
+                for j in range(len(kps_left)):
+                    x = kps_left[j][0] + (kps_right[j][0] - kps_left[j][0]) * t
+                    y = kps_left[j][1] + (kps_right[j][1] - kps_left[j][1]) * t
+                    conf = min(kps_left[j][2], kps_right[j][2]) * 0.5
+                    interp_kps.append([x, y, conf])
+                interp_bbox = [
+                    result[i_left]["bbox"][0] + (result[i_right]["bbox"][0] - result[i_left]["bbox"][0]) * t,
+                    result[i_left]["bbox"][1] + (result[i_right]["bbox"][1] - result[i_left]["bbox"][1]) * t,
+                    result[i_left]["bbox"][2] + (result[i_right]["bbox"][2] - result[i_left]["bbox"][2]) * t,
+                    result[i_left]["bbox"][3] + (result[i_right]["bbox"][3] - result[i_left]["bbox"][3]) * t,
+                ]
+                result[mid_idx] = {"keypoints": interp_kps, "bbox": interp_bbox}
+    elif len(detected_indices) == 1:
+        # 只有一帧有检测，复制到全部帧
+        detected = result[detected_indices[0]]
+        for i in range(total_frames):
+            if result[i] is None:
+                result[i] = detected
 
     return result
 

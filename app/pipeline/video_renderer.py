@@ -745,10 +745,6 @@ _POSE_EDGES = [
 
 _NUM_KEYPOINTS = 17
 
-# 缓存上一帧的有效骨骼数据（用于非检测帧的延续显示）
-_last_valid_pose: list[list[float]] | None = None
-
-
 def _draw_player_skeleton(
     frame: np.ndarray,
     player_keypoints: dict | None,
@@ -756,7 +752,7 @@ def _draw_player_skeleton(
     video_fps: float,
 ) -> np.ndarray:
     """
-    在帧上绘制近端球员的骨骼关键点
+    在帧上绘制近端球员的骨骼关键点（数据已插值，每帧都有值）
 
     Args:
         frame: 视频帧
@@ -767,8 +763,6 @@ def _draw_player_skeleton(
     Returns:
         绘制了骨骼的帧
     """
-    global _last_valid_pose
-
     if player_keypoints is None:
         return frame
 
@@ -776,17 +770,21 @@ def _draw_player_skeleton(
     if not frame_kps_list:
         return frame
 
-    # 获取当前帧的关键点数据
-    if frame_idx < len(frame_kps_list) and frame_kps_list[frame_idx] is not None:
-        kp_data = frame_kps_list[frame_idx]
-        _last_valid_pose = kp_data["keypoints"]
-    elif _last_valid_pose is not None:
-        # 非检测帧：使用上一帧的有效数据
-        kp_data = {"keypoints": _last_valid_pose}
+    if frame_idx >= len(frame_kps_list):
+        # 渲染帧超出检测范围，用最后一帧有效骨骼保持
+        kp_data = None
+        for fk in reversed(frame_kps_list):
+            if fk is not None:
+                kp_data = fk
+                break
+        if kp_data is None:
+            return frame
     else:
-        return frame
+        kp_data = frame_kps_list[frame_idx]
+        if kp_data is None:
+            return frame
 
-    keypoints = kp_data["keypoints"]  # [[x, y, conf], ...]
+    keypoints = kp_data.get("keypoints", [])  # [[x, y, conf], ...]
     if not keypoints or len(keypoints) < _NUM_KEYPOINTS:
         return frame
 
