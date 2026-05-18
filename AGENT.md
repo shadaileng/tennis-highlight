@@ -30,7 +30,8 @@ tennis-highlight/
 │   ├── models.py                 # Pydantic 请求/响应模型
 │   ├── pipeline/                 # 核心处理管线
 │   │   ├── ball_tracking.py      # YOLO 网球检测 + 插值 + 击球检测 + 球速/跑动速度
-│   │   ├── video_renderer.py     # 轨迹视频渲染（Catmull-Rom 样条 + ffmpeg H.264 pipe  + 球速/跑动渲染）
+│   │   ├── video_renderer.py     # Pipeline 装配函数，组装 RenderPass 并通过 ffmpeg H.264 pipe 输出
+│   │   ├── render_pipeline.py    # RenderPipeline 编排器 + 7 个独立 RenderPass（轨迹/火花/球速/跑动/落地点/骨骼/迷你球场）
 │   │   ├── racket_tracking.py    # 球拍检测
 │   │   ├── court_line_detector.py  # ResNet50 场地关键点检测（14 关键点）
 │   │   ├── player_tracker.py     # YOLO 球员检测与跟踪
@@ -220,6 +221,36 @@ artifact = {
 5. **渲染过滤**：`_init_speed_overlays()` 通过 `near_player_id` 过滤，仅初始化近端球员的球速文本和跑动连线。
 5. **小场地比例尺**：用 `DOUBLE_LINE_WIDTH`（10.97m）对标小场地绘制宽度
 
+### RenderPipeline 架构
+
+渲染架构从全局可变状态重构为组合式 Render Pipeline：
+
+```python
+# app/pipeline/render_pipeline.py
+class RenderPipeline:
+    """渲染管道 - 组合多个渲染层并逐帧执行"""
+    def __init__(self, width, height, video_fps):
+        self._passes: list[RenderPass] = []
+
+    def add_pass(self, rp: RenderPass): pass       # 注册渲染层
+    def get_pass(self, name: str) -> RenderPass: pass # 按类名查找
+    def set_enabled(self, name, enabled): pass      # 开关控制
+    def initialize_all(self): pass                  # 初始化所有已启用层
+    def render_frame(self, frame, frame_idx): pass  # 逐帧执行所有层
+```
+
+7 个独立 Render Pass 类，每个可独立开关：
+
+| Pass | 渲染内容 | render_options key | 默认 |
+|------|---------|-------------------|------|
+| `BallTrajectoryPass` | 网球轨迹线 + 检测框 | `ball_trail` | True |
+| `SparkPass` | 击球火花菱形飞出效果 | `spark` | True |
+| `BallSpeedPass` | 球速文本 P{n} XX m/s | `ball_speed` | True |
+| `RunningSpeedPass` | 跑动速度连线 + 文本 | `running_speed` | True |
+| `SkeletonPass` | 青色骨骼关键点骨架 | `skeleton` | True |
+| `LandingMarkerPass` | 落地点黄色十字标记 | — | True |
+| `MiniCourtPass` | 右下角迷你球场俯视图 | — | True |
+
 ### 视频渲染器函数签名
 
 ```python
@@ -233,16 +264,28 @@ def draw_ball_trajectory_video(
     ball_mini_coords=None,       # v7 新增（小场地球坐标）
     player_mini_coords=None,     # v7 新增（小场地球员坐标，保留扩展）
     player_keypoints=None,       # v8 新增（近端球员骨骼关键点）
+    render_options=None,         # v8 重构：控制各渲染层开关
 ) -> Path
 ```
 
-渲染效果（按绘制顺序）：
+`render_options` 示例：
+```python
+{
+    "ball_trail": True,       # 网球轨迹
+    "ball_speed": True,       # 球速文本
+    "running_speed": True,    # 跑动速度连线
+    "skeleton": True,         # 骨骼关键点
+    "spark": True,            # 击球火花效果
+}
+```
+
+渲染效果（按绘制顺序，受 render_options 控制）：
 1. **火花粒子**：击球点细长菱形飞出效果
 2. **球速文本**：击球后在击球点右上方显示青色渐变文本 "P{n} XX m/s"（n=球员ID），持续约 0.8 秒
 3. **跑动连线**：在起点和终点之间画黄色连线，中点显示 "P{n} XX m/s"（n=球员ID），持续约 1.0 秒
-4. **骨骼关键点**（v8 新增）：近端球员 17 个 COCO 关键点，青色骨架（BGR: 0,255,200）+ 白色发光外线，关键点置信度 < 0.2 跳过；非检测帧使用上一帧有效骨骼延续显示
-5. **落地点标记**（v7 新增）：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
-6. **迷你球场**（v7 新增）：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
+4. **骨骼关键点**：近端球员 17 个 COCO 关键点，青色骨架（BGR: 0,255,200）+ 白色发光外线，关键点置信度 < 0.2 跳过；非检测帧使用上一帧有效骨骼延续显示
+5. **落地点标记**：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
+6. **迷你球场**：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
 
 ## 多球跟踪（feature/multi-ball-tracking 分支）
 
@@ -254,7 +297,7 @@ def draw_ball_trajectory_video(
 | | `_interpolate_ball_positions` 按 `track_id` 独立插值 |
 | | `get_ball_shot_frames` 每个球分别分析击球，结果合并去重 |
 | | `DETECTION_STEP=3` 帧跳跃检测，每3帧检测1帧，~3x加速（CPU环境） |
-| `app/pipeline/video_renderer.py` | `trajectory_points: dict[int, list]` 按球 ID 分开存储轨迹 |
+| `app/pipeline/render_pipeline.py` | `BallTrajectoryPass` 中 `trajectory_points: dict[int, list]` 按球 ID 分开存储轨迹 |
 | | 每个球使用不同颜色（8 种循环），标记框显示 `Ball {id}` |
 
 ### 轨迹数据结构（渲染时）

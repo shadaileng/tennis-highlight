@@ -194,6 +194,21 @@ tr.off { color: #8c959f; }
 
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 
+.checkbox-label {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 6px !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  font-weight: 500 !important;
+  cursor: pointer;
+}
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
 .analysis-start-controls {
   display: flex;
   flex-wrap: wrap;

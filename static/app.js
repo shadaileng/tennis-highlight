@@ -24,8 +24,7 @@ const state = {
 };
 
 // Per-detector config schemas — single source of truth for which knobs/badges
-// belong to which detector. Used by renderStartConfigControls (filters the
-// Media Pool form) and renderAnalysisConfigs (filters the pill list).
+// belong to which detector.
 const _MEDIAN_FRAME_KEYS = [
   "sample_fps", "median_bg_samples",
   "diff_threshold", "motion_threshold",
@@ -289,71 +288,22 @@ async function reanalyzeVideo(videoId) {
 }
 
 async function startAnalysis(videoId) {
-  const media = state.media.find((m) => m.video_id === videoId);
-  const algorithm = $("start-algorithm").value;
-  
-  // Handle ball trajectory algorithm
-  if (algorithm === "ball_tracking_yolo") {
-    await startBallTrajectoryAnalysis(videoId);
-    return;
-  }
-  
-  if (algorithm === "median_court_roi" && !(media && media.has_court_calibration)) {
-    alert("Mark the court for this video before starting the Court ROI detector.");
-    return;
-  }
-  const knobs = {
-    diff_threshold: 25,
-    motion_threshold: 0.02,
-    merge_gap_s: 3.0,
-    min_segment_s: 5.0,
-    segment_padding_s: 1.0,
-    sample_fps: parseFloat($("start-sample-fps").value || "2"),
-    median_bg_samples: parseInt($("start-median-bg-samples").value || "80", 10),
-    enable_merge_gap: true,
-    enable_min_segment: true,
-    enable_padding: true,
-    court_weight: parseFloat($("start-court-weight").value || "1"),
-    outside_weight: parseFloat($("start-outside-weight").value || "0.15"),
-    near_camera_weight: parseFloat($("start-near-camera-weight").value || "0"),
-  };
-  const r = await fetch(`/process/${videoId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      algorithm,
-      knobs,
-      config: readStartConfig(algorithm),
-      range_start_s: parseTime($("start-range-start").value) ?? 0,
-      range_end_s: parseTime($("start-range-end").value) ?? media.duration_s,
-    }),
-  });
-  if (!r.ok) {
-    alert("Could not start analysis: " + (await r.text()));
-    return;
-  }
-  const data = await r.json();
-  const mediaEntry = state.media.find((m) => m.video_id === videoId);
-  // Immediately add a pending entry so the list shows it without waiting
-  state.analyses.push({
-    analysis_id: data.analysis_id,
-    video_id: videoId,
-    filename: mediaEntry ? mediaEntry.filename : "Unknown",
-    algorithm,
-    status: "pending",
-    progress_percent: 0,
-    range_start_s: parseTime($("start-range-start").value) ?? 0,
-    range_end_s: parseTime($("start-range-end").value) ?? (mediaEntry ? mediaEntry.duration_s : 0),
-    duration_s: mediaEntry ? mediaEntry.duration_s : 0,
-  });
-  renderAnalyses(state.analyses);
-  pollAnalyses();
+  await startBallTrajectoryAnalysis(videoId);
 }
 
 async function startBallTrajectoryAnalysis(videoId) {
   const media = state.media.find((m) => m.video_id === videoId);
   const rangeStart = parseTime($("start-range-start").value) ?? 0;
   const rangeEnd = parseTime($("start-range-end").value) ?? media.duration_s;
+
+  // 读取勾选框状态
+  const renderOptions = {
+    ball_trail: $("opt-ball-trail").checked,
+    ball_speed: $("opt-ball-speed").checked,
+    running_speed: $("opt-running-speed").checked,
+    skeleton: $("opt-skeleton").checked,
+    spark: $("opt-spark").checked,
+  };
 
   try {
     const r = await fetch(`/ball-trajectory-from-video/${videoId}`, {
@@ -362,6 +312,7 @@ async function startBallTrajectoryAnalysis(videoId) {
       body: JSON.stringify({ 
         range_start_s: rangeStart,
         range_end_s: rangeEnd,
+        render_options: renderOptions,
       }),
     });
     
@@ -514,18 +465,6 @@ async function loadEditorWithBallTrajectory(videoId, ballAnalysisId) {
   renderAll();
 }
 
-function readStartConfig(algorithm) {
-  if (algorithm === "pose_skeleton_yolo") {
-    return {
-      pose_model: $("start-pose-model").value || "yolo11n-pose.pt",
-      pose_conf: parseFloat($("start-pose-conf").value || "0.25"),
-      pose_imgsz: parseInt($("start-pose-imgsz").value || "640", 10),
-      sample_fps: parseFloat($("start-sample-fps").value || "2"),
-    };
-  }
-  return {};
-}
-
 async function deleteVideo(v) {
   if (!confirm(`Delete "${v.filename}" and all its segments / exports?`)) return;
   await fetch(`/videos/${v.video_id}`, { method: "DELETE" });
@@ -633,17 +572,6 @@ $("show-upload-btn").addEventListener("click", () => {
 $("cancel-upload-btn").addEventListener("click", async () => {
   await refreshLibrary();
 });
-
-$("start-algorithm").addEventListener("change", renderStartConfigControls);
-
-function renderStartConfigControls() {
-  const algorithm = $("start-algorithm").value;
-  document.querySelectorAll(".start-config").forEach((el) => {
-    const algorithms = (el.dataset.algorithms || "").split(/\s+/);
-    el.hidden = !algorithms.includes(algorithm);
-  });
-}
-renderStartConfigControls();
 
 // Click-help popover ------------------------------------------------------
 // Single floating popover positioned beside whichever .help-dot was clicked.
@@ -1802,7 +1730,6 @@ if (typeof window !== "undefined") {
   window.DETECTOR_CONFIGS = DETECTOR_CONFIGS;
   window.HELP_TEXT = HELP_TEXT;
   window.state = state;
-  window.renderStartConfigControls = renderStartConfigControls;
   window.renderAnalysisConfigs = renderAnalysisConfigs;
   window.showHelpPopover = showHelpPopover;
   window.hideHelpPopover = hideHelpPopover;

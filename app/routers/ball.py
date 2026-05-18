@@ -134,6 +134,7 @@ async def get_ball_trajectory(analysis_id: str):
 class BallFromVideoRequest(BaseModel):
     range_start_s: float | None = None
     range_end_s: float | None = None
+    render_options: dict | None = None
 
 
 @router.post("/ball-trajectory-from-video/{video_id}")
@@ -185,6 +186,7 @@ async def start_ball_analysis_from_video(
                     range_start_s=range_start,
                     range_end_s=range_end,
                     progress_cb=progress_cb,
+                    render_options=req.render_options,
                 ),
             )
             elapsed = time.time() - start_time

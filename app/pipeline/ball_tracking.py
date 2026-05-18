@@ -778,6 +778,21 @@ def _build_player_keypoints(
             if result[i] is None:
                 result[i] = detected
 
+    # 首帧前、末帧后的缺失帧用最近的有效帧填充（hold 模式）
+    if len(detected_indices) >= 2:
+        # 末帧后：用最后一帧有效骨骼保持
+        last_detected = detected_indices[-1]
+        last_kps = result[last_detected]
+        for i in range(last_detected + 1, total_frames):
+            if result[i] is None:
+                result[i] = last_kps
+        # 首帧前：用第一帧有效骨骼保持
+        first_detected = detected_indices[0]
+        first_kps = result[first_detected]
+        for i in range(0, first_detected):
+            if result[i] is None:
+                result[i] = first_kps
+
     return result
 
 
@@ -789,6 +804,7 @@ def analyze_ball_trajectory(
     range_start_s: float,
     range_end_s: float,
     progress_cb: ProgressCallback | None = None,
+    render_options: dict | None = None,
 ) -> tuple[Path, dict, Path | None]:
     """
     使用 YOLO 模型检测网球并生成轨迹数据
@@ -1171,6 +1187,7 @@ def analyze_ball_trajectory(
             ball_mini_coords=ball_mini_coords if ball_mini_coords else None,
             player_mini_coords=player_mini_coords if player_mini_coords else None,
             player_keypoints=player_keypoints,
+            render_options=render_options,
         )
         logger.info(f"Ball trajectory video saved to: {video_output_path}")
 

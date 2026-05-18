@@ -1,5 +1,29 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-18 18:00:00 (UTC+8)
+
+### refactor: Render Pipeline 拆分 + 前端勾选框控制
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/render_pipeline.py` | 新建文件，包含 RenderPipeline 编排器 + 7 个独立 Render Pass 类（BallTrajectoryPass、SparkPass、BallSpeedPass、RunningSpeedPass、LandingMarkerPass、SkeletonPass、MiniCourtPass），以及相关工具函数 |
+| `app/pipeline/video_renderer.py` | 重构：删除全局可变状态（_spark_effects、_ball_speed_overlays 等），改为 pipeline 装配模式；新增 render_options 参数控制各 Pass 开关 |
+| `app/pipeline/ball_tracking.py` | `analyze_ball_trajectory` 新增 `render_options` 参数，透传到 `draw_ball_trajectory_video` |
+| `app/routers/ball.py` | `BallFromVideoRequest` 新增 `render_options` 字段，透传到 `analyze_ball_trajectory` |
+| `static/index.html` | Algorithm 下拉框 + 配置项 → 5 个独立勾选框（网球轨迹、球速、跑动速度、骨骼、击球效果）|
+| `static/app.js` | `startAnalysis` 统一调用 BallTrajectory；`startBallTrajectoryAnalysis` 读取 checkbox 状态发送 `render_options`；移除 `renderStartConfigControls`、`readStartConfig` 等废弃函数 |
+| `static/style.css` | 新增 `.checkbox-label` 样式 |
+
+### 详细说明
+
+1. 重构了渲染架构：将 `video_renderer.py` 中的全局可变状态和内联绘制代码拆分为 7 个独立的 Render Pass 类，由 `RenderPipeline` 统一编排
+2. 每个 Pass 可独立开关：通过 `render_options` 字典控制（`ball_trail`、`ball_speed`、`running_speed`、`skeleton`、`spark`）
+3. 前端 Media Pool 界面不再有 Algorithm 下拉框，改为 5 个勾选框 + 范围起止输入
+4. 所有检测仍然全量运行（保持 artifact 数据完整性），渲染时按勾选状态过滤
+
+---
+
 ## 2026-05-15 22:00:00 (UTC+8)
 
 ### fix: 骨骼插值补齐缺失帧，解决骨骼跟不上人物的问题
