@@ -112,7 +112,7 @@ hit_moments: list[dict] = [
 artifact = {
     "metadata": {
         "detector": "ball_tracking_yolo",
-        "detector_version": 7,  # v7: 新增 ball_mini_coords, player_mini_coords 字段
+        "detector_version": 8,  # v8: 新增 player_keypoints（近端球员骨骼关键点）
         "model_path": "models/yolo5_last.pt",
         "video_width": int, "video_height": int,
         "video_fps": float, "duration_s": float,
@@ -196,6 +196,17 @@ artifact = {
     # v7 新增字段：
     "ball_mini_coords": [{track_id: (x, y)}, ...],    # 逐帧球在小场地上的坐标
     "player_mini_coords": [{track_id: (x, y)}, ...],  # 逐帧球员在小场地上的坐标
+    # v8 新增字段：
+    "player_keypoints": {  # 近端球员骨骼关键点（可选，检测成功时存在）
+        "near_player_id": int,  # 近端球员 track_id
+        "frame_keypoints": [    # 逐帧关键点（与 ball_detections 等长）
+            None | {            # None = 该帧未检测到骨骼
+                "keypoints": [[x, y, conf], ...],  # 17 个 COCO 关键点，像素坐标
+                "bbox": [x1, y1, x2, y2],          # 像素坐标
+            },
+            ...
+        ],
+    },
 }
 ```
 
@@ -221,6 +232,7 @@ def draw_ball_trajectory_video(
     court_coordinates=None,      # v7 新增（含 mini_court_keypoints）
     ball_mini_coords=None,       # v7 新增（小场地球坐标）
     player_mini_coords=None,     # v7 新增（小场地球员坐标，保留扩展）
+    player_keypoints=None,       # v8 新增（近端球员骨骼关键点）
 ) -> Path
 ```
 
@@ -228,8 +240,9 @@ def draw_ball_trajectory_video(
 1. **火花粒子**：击球点细长菱形飞出效果
 2. **球速文本**：击球后在击球点右上方显示青色渐变文本 "P{n} XX m/s"（n=球员ID），持续约 0.8 秒
 3. **跑动连线**：在起点和终点之间画黄色连线，中点显示 "P{n} XX m/s"（n=球员ID），持续约 1.0 秒
-4. **落地点标记**（v7 新增）：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
-5. **迷你球场**（v7 新增）：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
+4. **骨骼关键点**（v8 新增）：近端球员 17 个 COCO 关键点，青色骨架（BGR: 0,255,200）+ 白色发光外线，关键点置信度 < 0.2 跳过；非检测帧使用上一帧有效骨骼延续显示
+5. **落地点标记**（v7 新增）：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
+6. **迷你球场**（v7 新增）：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
 
 ## 多球跟踪（feature/multi-ball-tracking 分支）
 
