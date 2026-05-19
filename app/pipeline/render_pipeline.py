@@ -6,6 +6,7 @@ Render Pipeline - 组合式渲染管道
 """
 
 import logging
+import math
 import random
 from abc import ABC, abstractmethod
 
@@ -572,10 +573,10 @@ class LandingMarkerPass(RenderPass):
 # ============================================================
 
 class CourtAnimationPass(RenderPass):
-    """开场 1.5 秒一笔画成球场动画渲染层"""
+    """开场网球场关键点连线高亮频闪动画"""
 
-    # 一笔画路径：14 个关键点索引对
-    STROKE_SEQUENCE = [
+    # 所有球场线段（14 关键点索引对）
+    COURT_EDGES = [
         (0, 2), (2, 3), (3, 1), (1, 0),      # 外围 doubles 矩形
         (0, 4), (4, 5), (5, 7), (7, 6),      # singles 线
         (6, 4),                               # 上单打线
@@ -587,11 +588,12 @@ class CourtAnimationPass(RenderPass):
         super().__init__()
         self.court_coordinates = court_coordinates
         self.video_fps = video_fps
-        self._strokes: list[dict] = []
-        self.total_length = 0
+        self._segments: list[dict] = []
+        self._keypoints: list[tuple[int, int]] = []
 
     def initialize(self):
-        self._strokes = []
+        self._segments = []
+        self._keypoints = []
         if not self.court_coordinates:
             self.enabled = False
             return
@@ -599,89 +601,75 @@ class CourtAnimationPass(RenderPass):
         if not kps or len(kps) < 28:
             self.enabled = False
             return
-        pts = [(kps[i], kps[i + 1]) for i in range(0, 28, 2)]
-        for i1, i2 in self.STROKE_SEQUENCE:
-            p1 = (int(pts[i1][0]), int(pts[i1][1]))
-            p2 = (int(pts[i2][0]), int(pts[i2][1]))
-            length_ = np.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
-            self._strokes.append({"p1": p1, "p2": p2, "length": length_})
-        self.total_length = sum(s["length"] for s in self._strokes)
-        if self.total_length <= 0:
+        pts = [(int(kps[i]), int(kps[i + 1])) for i in range(0, 28, 2)]
+        for i1, i2 in self.COURT_EDGES:
+            if i1 < len(pts) and i2 < len(pts):
+                self._segments.append({"p1": pts[i1], "p2": pts[i2]})
+        for pt in pts:
+            self._keypoints.append(pt)
+        if not self._segments:
             self.enabled = False
 
     def draw(self, frame: np.ndarray, frame_idx: int) -> np.ndarray:
-        anim_frames = max(int(1.5 * self.video_fps), 1)
-        fade_frames = int(0.5 * self.video_fps)
+        appear_frames = max(int(0.15 * self.video_fps), 1)        # 快速出现
+        strobe_frames = max(int(1.5 * self.video_fps), 1)         # 频闪
+        fade_frames = max(int(0.35 * self.video_fps), 1)          # 淡出
+        total_frames = appear_frames + strobe_frames + fade_frames
 
-        if self.total_length <= 0:
+        if frame_idx >= total_frames:
             return frame
 
-        total_duration = anim_frames + fade_frames
-        progress = min(1.0, frame_idx / anim_frames)
-        drawn_length = self.total_length * progress
+        alpha = 0.0
 
-        # 计算淡出 alpha
-        if frame_idx <= anim_frames:
-            alpha = 1.0
-            pen_visible = True
-        elif frame_idx < total_duration:
-            fade_progress = (frame_idx - anim_frames) / fade_frames if fade_frames > 0 else 1
-            alpha = max(0, 1.0 - fade_progress)
-            pen_visible = False
+        # 阶段 1: 快速淡入
+        if frame_idx < appear_frames:
+            t = frame_idx / appear_frames
+            alpha = t  # 0 → 1
+
+        # 阶段 2: 频闪 - 正弦波脉冲
+        elif frame_idx < appear_frames + strobe_frames:
+            elapsed = frame_idx - appear_frames
+            # 频率随时间逐渐加快 (0.5 → 1.2 秒完成一个周期 → 0.15 秒)
+            progress_in_strobe = elapsed / strobe_frames if strobe_frames > 0 else 0
+            freq_hz = 3.0 + progress_in_strobe * 6.0  # 3Hz → 9Hz 加速
+            # 正弦波: α 在 [0.25, 1.0] 之间振荡
+            sin_val = math.sin(2 * math.pi * freq_hz * elapsed / self.video_fps)
+            alpha = 0.25 + 0.75 * (0.5 + 0.5 * sin_val)
+
+        # 阶段 3: 淡出
         else:
+            t = (frame_idx - appear_frames - strobe_frames) / fade_frames
+            alpha = max(0, 1.0 - t)
+
+        if alpha <= 0.02:
             return frame
 
-        if alpha <= 0:
-            return frame
-
-        accumulated = 0
-        pen_pos = None
-
-        for seg in self._strokes:
+        # 绘制所有线段（发光效果）
+        line_color = (230, 240, 255)  # BGR 浅青色
+        for seg in self._segments:
             p1, p2 = seg["p1"], seg["p2"]
-            seg_len = seg["length"]
+            # 外层光晕
+            overlay = frame.copy()
+            cv2.line(overlay, p1, p2, line_color, 5)
+            cv2.addWeighted(overlay, alpha * 0.2, frame, 1 - alpha * 0.2, 0, frame)
+            # 内层主线条
+            overlay = frame.copy()
+            cv2.line(overlay, p1, p2, line_color, 3)
+            cv2.addWeighted(overlay, alpha * 0.5, frame, 1 - alpha * 0.5, 0, frame)
+            # 核心亮线
+            cv2.line(frame, p1, p2, (255, 255, 255), 1)
 
-            if accumulated + seg_len <= drawn_length:
-                self._draw_court_line(frame, p1, p2, alpha)
-                accumulated += seg_len
-                pen_pos = p2
-            elif accumulated < drawn_length:
-                partial = drawn_length - accumulated
-                t = partial / seg_len if seg_len > 0 else 1.0
-                current_end = (
-                    int(p1[0] + (p2[0] - p1[0]) * t),
-                    int(p1[1] + (p2[1] - p1[1]) * t),
-                )
-                self._draw_court_line(frame, p1, current_end, alpha)
-                pen_pos = current_end
-                break
-            else:
-                break
-
-        if pen_visible and pen_pos and progress < 1.0:
-            self._draw_pen_tip(frame, pen_pos, alpha)
+        # 绘制关键点（发光圆点）
+        if alpha > 0.1:
+            for pt in self._keypoints:
+                # 外圈光晕
+                overlay = frame.copy()
+                cv2.circle(overlay, pt, 8, line_color, -1)
+                cv2.addWeighted(overlay, alpha * 0.25, frame, 1 - alpha * 0.25, 0, frame)
+                # 核心亮点
+                cv2.circle(frame, pt, 4, (255, 255, 255), -1)
 
         return frame
-
-    def _draw_court_line(self, frame, p1, p2, alpha):
-        """绘制球场线段，带发光效果"""
-        color = (200, 220, 255)
-        overlay = frame.copy()
-        cv2.line(overlay, p1, p2, color, 2)
-        cv2.addWeighted(overlay, alpha * 0.6, frame, 1 - alpha * 0.6, 0, frame)
-        overlay = frame.copy()
-        cv2.line(overlay, p1, p2, (255, 255, 255), 1)
-        cv2.addWeighted(overlay, alpha * 0.8, frame, 1 - alpha * 0.8, 0, frame)
-
-    def _draw_pen_tip(self, frame, pos, alpha):
-        """绘制发光笔尖"""
-        cx, cy = pos
-        for radius, r_alpha in [(20, alpha * 0.2), (12, alpha * 0.4), (6, alpha * 0.6)]:
-            overlay = frame.copy()
-            cv2.circle(overlay, (cx, cy), radius, (0, 255, 255), -1)
-            cv2.addWeighted(overlay, r_alpha, frame, 1 - r_alpha, 0, frame)
-        cv2.circle(frame, (cx, cy), 4, (255, 255, 255), -1)
-        cv2.circle(frame, (cx, cy), 2, (0, 255, 255), -1)
 
 
 # ============================================================

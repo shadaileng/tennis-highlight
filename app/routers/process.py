@@ -1,4 +1,7 @@
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -99,6 +102,8 @@ async def delete_analysis(analysis_id: str) -> dict:
                     removed.append(str(path))
             except OSError:
                 pass
+    if removed:
+        logger.info("Deleted analysis %s, removed files: %s", analysis_id, ", ".join(removed))
     return {"analysis_id": analysis_id, "removed_files": removed}
 
 
