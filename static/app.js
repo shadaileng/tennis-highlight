@@ -309,6 +309,7 @@ async function startBallTrajectoryAnalysis(videoId) {
     running_speed: $("opt-running-speed").checked,
     skeleton: $("opt-skeleton").checked,
     spark: $("opt-spark").checked,
+    court_anim: $("opt-court-anim").checked,
   };
 
   try {

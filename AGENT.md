@@ -31,7 +31,7 @@ tennis-highlight/
 │   ├── pipeline/                 # 核心处理管线
 │   │   ├── ball_tracking.py      # YOLO 网球检测 + 插值 + 击球检测 + 球速/跑动速度
 │   │   ├── video_renderer.py     # Pipeline 装配函数，组装 RenderPass 并通过 ffmpeg H.264 pipe 输出
-│   │   ├── render_pipeline.py    # RenderPipeline 编排器 + 7 个独立 RenderPass（轨迹/火花/球速/跑动/落地点/骨骼/迷你球场）
+│   │   ├── render_pipeline.py    # RenderPipeline 编排器 + 8 个独立 RenderPass（轨迹/火花/球速/跑动/落地点/骨骼/球场动画/迷你球场）
 │   │   ├── racket_tracking.py    # 球拍检测
 │   │   ├── court_line_detector.py  # ResNet50 场地关键点检测（14 关键点）
 │   │   ├── player_tracker.py     # YOLO 球员检测与跟踪
@@ -239,7 +239,7 @@ class RenderPipeline:
     def render_frame(self, frame, frame_idx): pass  # 逐帧执行所有层
 ```
 
-7 个独立 Render Pass 类，每个可独立开关：
+8 个独立 Render Pass 类，每个可独立开关：
 
 | Pass | 渲染内容 | render_options key | 默认 |
 |------|---------|-------------------|------|
@@ -249,6 +249,7 @@ class RenderPipeline:
 | `RunningSpeedPass` | 跑动速度连线 + 文本 | `running_speed` | True |
 | `SkeletonPass` | 青色骨骼关键点骨架 | `skeleton` | True |
 | `LandingMarkerPass` | 落地点黄色十字标记 | — | True |
+| `CourtAnimationPass` | 开场 1.5s 一笔画成球场动画 | `court_anim` | True |
 | `MiniCourtPass` | 右下角迷你球场俯视图 | — | True |
 
 ### 视频渲染器函数签名
@@ -276,6 +277,7 @@ def draw_ball_trajectory_video(
     "running_speed": True,    # 跑动速度连线
     "skeleton": True,         # 骨骼关键点
     "spark": True,            # 击球火花效果
+    "court_anim": True,       # 开场一笔画成球场动画（1.5s 绘制 + 0.5s 淡出）
 }
 ```
 
@@ -285,7 +287,8 @@ def draw_ball_trajectory_video(
 3. **跑动连线**：在起点和终点之间画黄色连线，中点显示 "P{n} XX m/s"（n=球员ID），持续约 1.0 秒
 4. **骨骼关键点**：近端球员 17 个 COCO 关键点，青色骨架（BGR: 0,255,200）+ 白色发光外线，关键点置信度 < 0.2 跳过；非检测帧使用上一帧有效骨骼延续显示
 5. **落地点标记**：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
-6. **迷你球场**：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
+6. **球场动画**：开场 1.5s 一笔画成球场动画，从左上角出发依次绘制 doubles 外框 → singles 线 → 发球区 → 球网，已画线段淡青色常亮 + 绘制中笔尖黄色发光圆点，完成后 0.5s 淡出消失
+7. **迷你球场**：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
 
 ## 多球跟踪（feature/multi-ball-tracking 分支）
 

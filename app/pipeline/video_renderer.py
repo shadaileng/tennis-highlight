@@ -21,6 +21,7 @@ from app.pipeline.render_pipeline import (
     LandingMarkerPass,
     SkeletonPass,
     MiniCourtPass,
+    CourtAnimationPass,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ def draw_ball_trajectory_video(
             "running_speed": True,    # 跑动速度连线
             "skeleton": True,         # 骨骼关键点
             "spark": True,            # 击球火花效果
+            "court_anim": True,       # 开场一笔画成球场动画
         }
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +100,7 @@ def draw_ball_trajectory_video(
         court_keypoints=court_coordinates.get("original_keypoints") if court_coordinates else None,
     ))
     pipeline.add_pass(SkeletonPass(player_keypoints, video_fps))
+    pipeline.add_pass(CourtAnimationPass(court_coordinates, video_fps))
     pipeline.add_pass(MiniCourtPass(court_coordinates, ball_detections, ball_mini_coords))
 
     # 应用 render_options 控制开关
@@ -107,6 +110,7 @@ def draw_ball_trajectory_video(
         pipeline.get_pass("BallSpeedPass").enabled = render_options.get("ball_speed", True)
         pipeline.get_pass("RunningSpeedPass").enabled = render_options.get("running_speed", True)
         pipeline.get_pass("SkeletonPass").enabled = render_options.get("skeleton", True)
+        pipeline.get_pass("CourtAnimationPass").enabled = render_options.get("court_anim", True)
         # LandingMarkerPass 和 MiniCourtPass 默认保持启用（无对应 checkbox）
 
     # 初始化所有启用的渲染层

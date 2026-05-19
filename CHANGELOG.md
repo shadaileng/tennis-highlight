@@ -1,5 +1,26 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-19 12:00:00 (UTC+8)
+
+### feat: 添加球场一笔画成动画 + 前端控制选项
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/pipeline/render_pipeline.py` | 新增 `CourtAnimationPass` 渲染层，实现开场 1.5s 一笔画成球场线条动画 + 0.5s 淡出 |
+| `app/pipeline/video_renderer.py` | 注册 `CourtAnimationPass` 到 Pipeline，支持 `court_anim` 开关 |
+| `static/index.html` | 渲染选项区新增"球场动画"勾选框 |
+| `static/app.js` | `renderOptions` 对象增加 `court_anim` 字段 |
+| `AGENT.md` | 更新目录结构和 RenderPipeline 章节，新增 `CourtAnimationPass` 说明 |
+
+### 详细说明
+
+1. **CourtAnimationPass**：开场 1.5s 内按"一笔画"路径绘制网球场线条（doubles 外框 → singles 线 → 发球区 → 球网），已画线段淡青色常亮，笔尖黄色发光圆点，完成后 0.5s 淡出消失。
+2. **前端控制**：在"击球效果"之后新增"球场动画"勾选框，默认开启，随其他选项一起发送到后端。
+3. 无需修改后端路由或数据流，`render_options` 通用字典自动传递新字段。
+
+---
+
 ## 2026-05-18 19:10:00 (UTC+8)
 
 ### fix: 修复分析时间列空数据和列错位问题

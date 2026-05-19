@@ -568,6 +568,123 @@ class LandingMarkerPass(RenderPass):
 
 
 # ============================================================
+# CourtAnimationPass - 开场一笔画成球场
+# ============================================================
+
+class CourtAnimationPass(RenderPass):
+    """开场 1.5 秒一笔画成球场动画渲染层"""
+
+    # 一笔画路径：14 个关键点索引对
+    STROKE_SEQUENCE = [
+        (0, 2), (2, 3), (3, 1), (1, 0),      # 外围 doubles 矩形
+        (0, 4), (4, 5), (5, 7), (7, 6),      # singles 线
+        (6, 4),                               # 上单打线
+        (4, 8), (8, 9), (9, 11), (11, 10),   # 发球区
+        (10, 12), (12, 13),                   # 球网
+    ]
+
+    def __init__(self, court_coordinates: dict | None, video_fps: float):
+        super().__init__()
+        self.court_coordinates = court_coordinates
+        self.video_fps = video_fps
+        self._strokes: list[dict] = []
+        self.total_length = 0
+
+    def initialize(self):
+        self._strokes = []
+        if not self.court_coordinates:
+            self.enabled = False
+            return
+        kps = self.court_coordinates.get("original_keypoints", [])
+        if not kps or len(kps) < 28:
+            self.enabled = False
+            return
+        pts = [(kps[i], kps[i + 1]) for i in range(0, 28, 2)]
+        for i1, i2 in self.STROKE_SEQUENCE:
+            p1 = (int(pts[i1][0]), int(pts[i1][1]))
+            p2 = (int(pts[i2][0]), int(pts[i2][1]))
+            length_ = np.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
+            self._strokes.append({"p1": p1, "p2": p2, "length": length_})
+        self.total_length = sum(s["length"] for s in self._strokes)
+        if self.total_length <= 0:
+            self.enabled = False
+
+    def draw(self, frame: np.ndarray, frame_idx: int) -> np.ndarray:
+        anim_frames = max(int(1.5 * self.video_fps), 1)
+        fade_frames = int(0.5 * self.video_fps)
+
+        if self.total_length <= 0:
+            return frame
+
+        total_duration = anim_frames + fade_frames
+        progress = min(1.0, frame_idx / anim_frames)
+        drawn_length = self.total_length * progress
+
+        # 计算淡出 alpha
+        if frame_idx <= anim_frames:
+            alpha = 1.0
+            pen_visible = True
+        elif frame_idx < total_duration:
+            fade_progress = (frame_idx - anim_frames) / fade_frames if fade_frames > 0 else 1
+            alpha = max(0, 1.0 - fade_progress)
+            pen_visible = False
+        else:
+            return frame
+
+        if alpha <= 0:
+            return frame
+
+        accumulated = 0
+        pen_pos = None
+
+        for seg in self._strokes:
+            p1, p2 = seg["p1"], seg["p2"]
+            seg_len = seg["length"]
+
+            if accumulated + seg_len <= drawn_length:
+                self._draw_court_line(frame, p1, p2, alpha)
+                accumulated += seg_len
+                pen_pos = p2
+            elif accumulated < drawn_length:
+                partial = drawn_length - accumulated
+                t = partial / seg_len if seg_len > 0 else 1.0
+                current_end = (
+                    int(p1[0] + (p2[0] - p1[0]) * t),
+                    int(p1[1] + (p2[1] - p1[1]) * t),
+                )
+                self._draw_court_line(frame, p1, current_end, alpha)
+                pen_pos = current_end
+                break
+            else:
+                break
+
+        if pen_visible and pen_pos and progress < 1.0:
+            self._draw_pen_tip(frame, pen_pos, alpha)
+
+        return frame
+
+    def _draw_court_line(self, frame, p1, p2, alpha):
+        """绘制球场线段，带发光效果"""
+        color = (200, 220, 255)
+        overlay = frame.copy()
+        cv2.line(overlay, p1, p2, color, 2)
+        cv2.addWeighted(overlay, alpha * 0.6, frame, 1 - alpha * 0.6, 0, frame)
+        overlay = frame.copy()
+        cv2.line(overlay, p1, p2, (255, 255, 255), 1)
+        cv2.addWeighted(overlay, alpha * 0.8, frame, 1 - alpha * 0.8, 0, frame)
+
+    def _draw_pen_tip(self, frame, pos, alpha):
+        """绘制发光笔尖"""
+        cx, cy = pos
+        for radius, r_alpha in [(20, alpha * 0.2), (12, alpha * 0.4), (6, alpha * 0.6)]:
+            overlay = frame.copy()
+            cv2.circle(overlay, (cx, cy), radius, (0, 255, 255), -1)
+            cv2.addWeighted(overlay, r_alpha, frame, 1 - r_alpha, 0, frame)
+        cv2.circle(frame, (cx, cy), 4, (255, 255, 255), -1)
+        cv2.circle(frame, (cx, cy), 2, (0, 255, 255), -1)
+
+
+# ============================================================
 # SkeletonPass - 骨骼关键点
 # ============================================================
 
