@@ -1,5 +1,23 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-18 19:00:00 (UTC+8)
+
+### feat: 分析记录表增加分析日期时间列
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `static/index.html` | Analyses 表格新增 `<th>分析时间</th>` 列头 |
+| `static/app.js` | 新增 `fmtDateTime()` 函数格式化 Unix 时间戳；`renderAnalyses` 中插入 dateTd 单元格，显示 `YYYY-MM-DD HH:mm` 格式，`title` 为完整 locale 字符串 |
+
+### 详细说明
+
+1. 做了什么：在 Analyses 表格的 File 和 Algorithm 列之间插入一列"分析时间"，显示分析的创建时间。
+2. 怎么做的：利用后端已存在的 `created_at` 字段（Unix 时间戳），使用 `fmtDateTime()` 格式化为可读的 `2026-05-18 15:30` 格式，并设置 `title` 为 `toLocaleString("zh-CN")` 完整时间。
+3. 预期效果：用户可直观区分不同时间提交的分析记录。
+
+---
+
 ## 2026-05-18 18:15:00 (UTC+8)
 
 ### chore: 去除页面无用组件

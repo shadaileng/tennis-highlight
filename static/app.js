@@ -101,6 +101,12 @@ function fmtPrecise(t) {
   const s = (t % 60).toFixed(1);
   return `${m}:${s.padStart(4, "0")}`;
 }
+function fmtDateTime(ts) {
+  if (!ts || !isFinite(ts)) return "—";
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 // Library -----------------------------------------------------------------
 async function refreshLibrary() {
@@ -172,6 +178,9 @@ function renderAnalyses(analyses) {
     const tr = document.createElement("tr");
     const fileTd = document.createElement("td");
     fileTd.textContent = a.filename;
+    const dateTd = document.createElement("td");
+    dateTd.textContent = a.created_at ? fmtDateTime(a.created_at) : "—";
+    dateTd.title = a.created_at ? new Date(a.created_at * 1000).toLocaleString("zh-CN") : "";
     const algoTd = document.createElement("td");
     algoTd.textContent = a.algorithm;
     const statusTd = document.createElement("td");
@@ -227,7 +236,7 @@ function renderAnalyses(analyses) {
       range.textContent = `${fmtPrecise(a.range_start_s)}-${fmtPrecise(a.range_end_s)}`;
       progressTd.appendChild(range);
     }
-    tr.append(fileTd, algoTd, statusTd, progressTd, actTd);
+    tr.append(fileTd, dateTd, algoTd, statusTd, progressTd, actTd);
     tbody.appendChild(tr);
   }
 }
