@@ -90,14 +90,15 @@ async def delete_analysis(analysis_id: str) -> dict:
         raise HTTPException(409, "cannot delete an actively running analysis")
     result = await delete_analysis_run(analysis_id)
     removed = []
-    if result and result.get("artifact_path"):
-        path = Path(result["artifact_path"])
-        try:
-            if path.exists():
-                path.unlink()
-                removed.append(str(path))
-        except OSError:
-            pass
+    for key in ("artifact_path", "video_path"):
+        if result and result.get(key):
+            path = Path(result[key])
+            try:
+                if path.exists():
+                    path.unlink()
+                    removed.append(str(path))
+            except OSError:
+                pass
     return {"analysis_id": analysis_id, "removed_files": removed}
 
 

@@ -1,5 +1,45 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-19 16:30:00 (UTC+8)
+
+### fix: 删除分析时同步清理球场轨迹视频文件
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `app/database.py` | `delete_analysis_run()` 查询 `SELECT artifact_path, video_path` 并同时返回 `video_path` |
+| `app/routers/process.py` | `delete_analysis()` 遍历 `artifact_path` 和 `video_path` 两个 key 删除对应文件 |
+
+### 详细说明
+
+1. 做了什么：修复删除分析记录时只删了 `.ball.json.gz` artifact，漏删 `data/ball_videos/` 下球场轨迹视频文件的问题
+2. 怎么做的：
+   - `delete_analysis_run()` SQL 查询从 `SELECT artifact_path` 改为 `SELECT artifact_path, video_path`，返回字典新增 `video_path`
+   - `delete_analysis()` 路由中循环遍历 `("artifact_path", "video_path")`，逐一删除文件
+3. 附加清理：删除了根目录的临时测试脚本（`check_diff.py`、`check_tip.py`、`test_court_anim.py`、`test_render_court_anim.py`、`test_render.py`、`test_ball_render.png`）和 `test_output/` 目录
+
+---
+
+## 2026-05-19 14:00:00 (UTC+8)
+
+### feat: 分析记录表格增加编辑/批量删除功能
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| `static/index.html` | Analyses 卡片头部增加工具栏（Edit 按钮 + 批量删除按钮），表格增加勾选列 |
+| `static/app.js` | 新增 `analysesEditMode` 状态，`renderAnalyses` 支持编辑模式（每行勾选框），新增 `toggleAnalysesEditMode`/`batchDeleteAnalyses` 及全选逻辑，CSS/JS 缓存版本号增至 v3 |
+| `static/style.css` | 新增 `.danger` 按钮样式（红色背景） |
+
+### 详细说明
+
+1. 点击 "Edit" 进入编辑模式：每行显示勾选框，原操作按钮隐藏，Edit 按钮变为 "Cancel"
+2. 勾选后点击 "Delete selected" 确认删除，逐条调用 DELETE `/analyses/{id}` API
+3. 正在运行中的分析（status="analyzing"）禁用勾选，防止误删
+4. 表头全选复选框可一键勾选/取消所有可选条目
+
+---
+
 ## 2026-05-19 12:00:00 (UTC+8)
 
 ### feat: 添加球场一笔画成动画 + 前端控制选项

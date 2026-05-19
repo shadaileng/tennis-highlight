@@ -627,16 +627,17 @@ async def delete_analysis_run(analysis_id: str) -> dict | None:
     def _q():
         with _connect() as conn:
             row = conn.execute(
-                "SELECT artifact_path FROM analyses WHERE id=?",
+                "SELECT artifact_path, video_path FROM analyses WHERE id=?",
                 (analysis_id,),
             ).fetchone()
             if row is None:
                 return None
             artifact_path = row["artifact_path"]
+            video_path = row["video_path"]
             conn.execute("DELETE FROM segments WHERE analysis_id=?", (analysis_id,))
             conn.execute("DELETE FROM analyses WHERE id=?", (analysis_id,))
             conn.commit()
-            return {"artifact_path": artifact_path}
+            return {"artifact_path": artifact_path, "video_path": video_path}
     return await asyncio.to_thread(_q)
 
 
