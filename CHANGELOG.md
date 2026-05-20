@@ -1,5 +1,28 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-20 11:30:00 (UTC+8)
+
+### feat: 手动 4 角点 + Homography 替代 ResNet50 场地检测
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/pipeline/court_homography.py | **新增**：手动 4 角点 → Homography → 14 关键点转换模块 |
+| app/pipeline/ball_tracking.py | 添加 court_calibration 参数，优先使用手动校准 |
+| app/routers/ball.py | 读取数据库 court_calibration_json 传递给检测函数 |
+| app/pipeline/orchestrator.py | 球轨迹分析时读取 court_calibration 并传递给检测函数 |
+| static/index.html | 更新校准帮助文本，添加视觉引导 |
+| static/app.js | 更新校准 UI，显示 ❶❷❸❹ 编号和位置标签 |
+
+### 详细说明
+
+1. 新增 `court_homography.py` 模块：用户标记球场 4 个外角（归一化坐标）→ 计算 Homography 矩阵 → 将标准球场 14 关键点投影到图像坐标系
+2. 检测逻辑变更：有手动校准时优先使用 Homography（跳过 ResNet50 加载，更快速、更精确）；无校准时回退到 ResNet50 自动检测
+3. 所有下游处理（球员过滤、小场地映射、速度计算）保持不变
+4. 前端校准界面增加点编号和位置标签（近侧左边/右边、远侧右边/左边），提升用户体验
+
+---
+
 ## 2026-05-19 13:58:00 (UTC+8)
 
 ### feat: 网球场开场动画改为关键点连线高亮频闪效果

@@ -50,6 +50,12 @@ async def start_ball_analysis(
     if not video_path.exists():
         raise HTTPException(404, "video file not found")
 
+    # 读取 court_calibration（如果有手动标记的球场）
+    video = await get_video(analysis["video_id"])
+    court_calibration = None
+    if video and video.get("court_calibration_json"):
+        court_calibration = json.loads(video["court_calibration_json"])
+
     async def run():
         try:
             await update_analysis_status(ball_analysis_id, "analyzing")
@@ -70,6 +76,7 @@ async def start_ball_analysis(
                     range_start_s=analysis["range_start_s"] or 0,
                     range_end_s=analysis["range_end_s"] or analysis["duration_s"],
                     progress_cb=progress_cb,
+                    court_calibration=court_calibration,
                 ),
             )
             elapsed = time.time() - start_time
@@ -157,6 +164,11 @@ async def start_ball_analysis_from_video(
     if not video_path.exists():
         raise HTTPException(404, "video file not found")
 
+    # 读取 court_calibration（如果有手动标记的球场）
+    court_calibration = None
+    if video.get("court_calibration_json"):
+        court_calibration = json.loads(video["court_calibration_json"])
+
     ball_analysis_id = await create_analysis(
         video_id=video_id,
         algorithm=BALL_ALGORITHM,
@@ -187,6 +199,7 @@ async def start_ball_analysis_from_video(
                     range_end_s=range_end,
                     progress_cb=progress_cb,
                     render_options=req.render_options,
+                    court_calibration=court_calibration,
                 ),
             )
             elapsed = time.time() - start_time

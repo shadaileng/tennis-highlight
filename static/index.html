@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Tennis Highlight Editor</title>
-  <link rel="stylesheet" href="/static/style.css?v=2" />
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
 <body>
   <header>
@@ -79,7 +79,14 @@
         <h2>Court Calibration</h2>
         <button id="close-calibration-btn">Done</button>
       </div>
-      <div class="muted" id="calibration-help">Click 4 outer court corners clockwise: near-left, near-right, far-right, far-left.</div>
+      <div class="muted" id="calibration-help">
+        <strong>点击球场 4 个外角</strong>（按顺序）：<br/>
+        <span style="color:#cf222e;">❶</span> 近侧左边（底线左下） →
+        <span style="color:#cf222e;">❷</span> 近侧右边（底线右下） →
+        <span style="color:#cf222e;">❸</span> 远侧右边（底线右上） →
+        <span style="color:#cf222e;">❹</span> 远侧左边（底线左上）<br/>
+        <em>提示：播放视频找到清晰展示 4 个球场角的画面后暂停再点击。</em>
+      </div>
       <div id="calibration-wrap">
         <video id="calibration-video" controls preload="metadata"></video>
         <canvas id="calibration-canvas"></canvas>
@@ -91,10 +98,17 @@
     </section>
 
     <section id="analyses-section" class="card" hidden>
-      <h2>Analyses</h2>
+      <div class="row-between">
+        <h2>Analyses</h2>
+        <div id="analyses-toolbar">
+          <button id="batch-delete-btn" class="danger" hidden>Delete selected</button>
+          <button id="edit-analyses-btn">Edit</button>
+        </div>
+      </div>
       <table id="analyses-table">
         <thead>
           <tr>
+            <th id="analyses-th-select" hidden><input type="checkbox" id="select-all-analyses" /></th>
             <th>File</th>
             <th>分析时间</th>
             <th>Algorithm</th>
@@ -220,6 +234,6 @@
 
   <div id="help-popover" class="help-popover" hidden></div>
 
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

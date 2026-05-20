@@ -18,6 +18,7 @@ const state = {
   ballTrajectory: [],
   ballAnalysisId: null,
   ballVideoPath: null, // Path to ball trajectory MP4 video
+  analysesEditMode: false, // Whether analyses table is in edit mode
 };
 
 // Per-detector config schemas — single source of truth for which knobs/badges
@@ -174,8 +175,35 @@ function renderAnalyses(analyses) {
   const tbody = $("analyses-tbody");
   tbody.innerHTML = "";
   $("analyses-section").hidden = !analyses.length;
+  
+  // 编辑模式 UI 控制
+  const isEdit = state.analysesEditMode;
+  const selectTh = $("analyses-th-select");
+  const selectAll = $("select-all-analyses");
+  const batchBtn = $("batch-delete-btn");
+  const editBtn = $("edit-analyses-btn");
+  
+  selectTh.hidden = !isEdit;
+  if (selectAll) selectAll.checked = false;
+  if (batchBtn) batchBtn.hidden = !isEdit;
+  if (editBtn) editBtn.textContent = isEdit ? "Cancel" : "Edit";
+  
   for (const a of analyses) {
     const tr = document.createElement("tr");
+    const isDeletable = a.status !== "analyzing";
+    
+    // 编辑模式勾选框列
+    const checkTd = document.createElement("td");
+    checkTd.hidden = !isEdit;
+    if (isEdit) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "analysis-select-cb";
+      cb.dataset.analysisId = a.analysis_id;
+      if (!isDeletable) cb.disabled = true;
+      checkTd.appendChild(cb);
+    }
+    
     const fileTd = document.createElement("td");
     fileTd.textContent = a.filename;
     const dateTd = document.createElement("td");
@@ -210,25 +238,29 @@ function renderAnalyses(analyses) {
       progressTd.textContent = a.status === "done" ? "100%" : "—";
     }
     const actTd = document.createElement("td");
-    if (a.status === "done") {
-      const open = document.createElement("button");
-      open.className = "primary";
-      open.textContent = "Open";
-      open.addEventListener("click", () => openAnalysis(a));
-      actTd.appendChild(open);
-    }
-    if (a.status === "error") {
-      const del = document.createElement("button");
-      del.textContent = "Delete";
-      del.addEventListener("click", () => deleteAnalysis(a));
-      actTd.appendChild(del);
-    }
-    if (a.status === "pending" || a.status === "analyzing") {
-      const cancel = document.createElement("button");
-      cancel.textContent = "Cancel";
-      cancel.style.marginLeft = "6px";
-      cancel.addEventListener("click", () => deleteAnalysis(a));
-      actTd.appendChild(cancel);
+    if (isEdit) {
+      // 编辑模式下隐藏原有操作按钮
+    } else {
+      if (a.status === "done") {
+        const open = document.createElement("button");
+        open.className = "primary";
+        open.textContent = "Open";
+        open.addEventListener("click", () => openAnalysis(a));
+        actTd.appendChild(open);
+      }
+      if (a.status === "error") {
+        const del = document.createElement("button");
+        del.textContent = "Delete";
+        del.addEventListener("click", () => deleteAnalysis(a));
+        actTd.appendChild(del);
+      }
+      if (a.status === "pending" || a.status === "analyzing") {
+        const cancel = document.createElement("button");
+        cancel.textContent = "Cancel";
+        cancel.style.marginLeft = "6px";
+        cancel.addEventListener("click", () => deleteAnalysis(a));
+        actTd.appendChild(cancel);
+      }
     }
     const range = document.createElement("div");
     range.className = "muted";
@@ -236,7 +268,7 @@ function renderAnalyses(analyses) {
       range.textContent = `${fmtPrecise(a.range_start_s)}-${fmtPrecise(a.range_end_s)}`;
       progressTd.appendChild(range);
     }
-    tr.append(fileTd, dateTd, algoTd, statusTd, progressTd, actTd);
+    tr.append(checkTd, fileTd, dateTd, algoTd, statusTd, progressTd, actTd);
     tbody.appendChild(tr);
   }
 }
@@ -251,6 +283,39 @@ async function deleteAnalysis(a) {
   }
   await refreshLibrary();
 }
+
+// 分析记录编辑模式 ------------------------------------------------
+
+function toggleAnalysesEditMode() {
+  state.analysesEditMode = !state.analysesEditMode;
+  renderAnalyses(state.analyses);
+}
+
+async function batchDeleteAnalyses() {
+  const cbs = document.querySelectorAll(".analysis-select-cb:checked");
+  if (!cbs.length) return;
+  const ids = Array.from(cbs).map(cb => cb.dataset.analysisId);
+  if (!confirm(`Delete ${ids.length} selected analysis record(s)?`)) return;
+  let failed = 0;
+  for (const id of ids) {
+    const r = await fetch(`/analyses/${id}`, { method: "DELETE" });
+    if (!r.ok) failed++;
+  }
+  if (failed) {
+    alert(`${ids.length - failed} deleted, ${failed} failed.`);
+  }
+  state.analysesEditMode = false;
+  await refreshLibrary();
+}
+
+$("edit-analyses-btn").addEventListener("click", toggleAnalysesEditMode);
+$("batch-delete-btn").addEventListener("click", batchDeleteAnalyses);
+$("select-all-analyses")?.addEventListener("change", (e) => {
+  const checked = e.target.checked;
+  document.querySelectorAll(".analysis-select-cb").forEach(cb => {
+    if (!cb.disabled) cb.checked = checked;
+  });
+});
 
 function fmtEta(seconds) {
   if (!isFinite(seconds)) return "unknown";
@@ -533,15 +598,24 @@ function drawCalibration() {
   if (pts.length === 4) calibrationCtx.closePath();
   calibrationCtx.stroke();
   if (pts.length === 4) calibrationCtx.fill();
+  // 绘制点编号 + 位置标签
+  const labels = ["近侧左边", "近侧右边", "远侧右边", "远侧左边"];
   pts.forEach((p, i) => {
     const x = p.x * w, y = p.y * h;
     calibrationCtx.fillStyle = "#cf222e";
     calibrationCtx.beginPath();
-    calibrationCtx.arc(x, y, 5, 0, Math.PI * 2);
+    calibrationCtx.arc(x, y, 6, 0, Math.PI * 2);
     calibrationCtx.fill();
     calibrationCtx.fillStyle = "white";
+    calibrationCtx.font = "bold 13px sans-serif";
+    calibrationCtx.fillText(String(i + 1), x + 9, y - 9);
+    // 位置标签
     calibrationCtx.font = "12px sans-serif";
-    calibrationCtx.fillText(String(i + 1), x + 7, y - 7);
+    calibrationCtx.fillStyle = "rgba(0,0,0,0.75)";
+    const tw = calibrationCtx.measureText(labels[i]).width;
+    calibrationCtx.fillRect(x - tw / 2 + 9, y - 28, tw + 4, 16);
+    calibrationCtx.fillStyle = "#fff";
+    calibrationCtx.fillText(labels[i], x + 11, y - 16);
   });
 }
 
@@ -565,6 +639,17 @@ $("save-calibration-btn").addEventListener("click", async () => {
     return;
   }
   await refreshLibrary();
+  // 返回 library 并提示 Homography 已启用
+  showOnly("library-section");
+  const btn = document.querySelector(`[data-video-id="${state.calibrationVideoId}"] ~ td button`);
+  setTimeout(() => {
+    const statusEl = document.getElementById("status-text");
+    if (statusEl) {
+      statusEl.textContent = "✅ 球场校准已保存。后续球轨迹分析将使用手动校准（Homography），精度更高。";
+      statusEl.style.color = "#1a7f37";
+      setTimeout(() => { statusEl.style.color = ""; }, 5000);
+    }
+  }, 100);
 });
 
 $("close-calibration-btn").addEventListener("click", refreshLibrary);

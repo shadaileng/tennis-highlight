@@ -12,7 +12,8 @@
 |----|------|
 | 后端框架 | FastAPI (Python 3.11+) |
 | 视频处理 | OpenCV (`opencv-python-headless`), ffmpeg |
-| ML 模型 | YOLOv5 (网球检测), YOLOv8 (球员检测), YOLOv8/YOLO11-pose (姿态检测), ResNet50 (场地关键点) |
+| ML 模型 | YOLOv5 (网球检测), YOLOv8 (球员检测), YOLOv8/YOLO11-pose (姿态检测), ResNet50 (场地关键点, 备选) |
+| 球场校准 | **手动 4 角点 + Homography（默认优先）**，ResNet50 自动检测（回退方案） |
 | 数据处理 | scipy (Savgol 滤波, find_peaks), pandas (DataFrame 分析) |
 | 数据库 | SQLite (`app/database.py` 管理) |
 | 前端 | 纯 JS + HTML + CSS (单页应用, 无框架) |
@@ -30,6 +31,7 @@ tennis-highlight/
 │   ├── models.py                 # Pydantic 请求/响应模型
 │   ├── pipeline/                 # 核心处理管线
 │   │   ├── ball_tracking.py      # YOLO 网球检测 + 插值 + 击球检测 + 球速/跑动速度
+│   │   ├── court_homography.py   # 手动 4 角点 → Homography → 14 关键点（优先于 ResNet50）
 │   │   ├── video_renderer.py     # Pipeline 装配函数，组装 RenderPass 并通过 ffmpeg H.264 pipe 输出
 │   │   ├── render_pipeline.py    # RenderPipeline 编排器 + 8 个独立 RenderPass（轨迹/火花/球速/跑动/落地点/骨骼/球场动画/迷你球场）
 │   │   ├── racket_tracking.py    # 球拍检测
@@ -214,7 +216,7 @@ artifact = {
 ### 速度事件计算
 
 参考 Tennis_AI_mainland 的算法：
-1. **小场地映射**：通过 `court_line_detector`（ResNet50）检测场地 14 关键点，再用 `mini_court` 将球员和球映射到小场地坐标系
+1. **小场地映射**：优先使用 `court_homography`（手动 4 角点 + Homography）检测场地 14 关键点；若无手动校准则回退到 `court_line_detector`（ResNet50）。然后用 `mini_court` 将球员和球映射到小场地坐标系。
 2. **靠近镜头球员确定**：优先使用**网线分界法**（`_assign_player_ids_by_court_side`），基于关键点 12/13（网柱）的 y 均值作为网线，foot_y > net_y 为近端球员。回退到 foot_y 比较（`_find_near_side_player`）。
 3. **球速**：相邻击球帧间球在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 → m/s。计算所有击球事件（不限球员），数据含 `hitter_id` 标识击球球员。
 4. **跑动速度**：相邻击球帧间球员在小场地上的位移 × 实际网宽 / 小场地宽度 / 时间 → m/s。计算所有球员在击球间隔内的移动速度，数据含 `player_id` 标识球员。

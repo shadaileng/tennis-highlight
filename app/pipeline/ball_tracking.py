@@ -805,9 +805,16 @@ def analyze_ball_trajectory(
     range_end_s: float,
     progress_cb: ProgressCallback | None = None,
     render_options: dict | None = None,
+    court_calibration: dict | None = None,
 ) -> tuple[Path, dict, Path | None]:
     """
     使用 YOLO 模型检测网球并生成轨迹数据
+
+    Args:
+        court_calibration: 可选。用户手动标记的 4 个球场角点
+            {"points": [{"x": 0-1, "y": 0-1}, ...]}
+            提供时优先使用 Homography 代替 ResNet50 自动检测
+            None 时回退到 ResNet50
 
     返回:
         (artifact_path, artifact, video_output_path)
@@ -979,9 +986,6 @@ def analyze_ball_trajectory(
     if player_tracker and any(player_detections):
         progress_cb and progress_cb(85.0, "Detecting court lines...", None)
         try:
-            from app.pipeline.court_line_detector import CourtLineDetector
-            from app.pipeline.mini_court import MiniCourt
-
             # 读取第一帧用于场地检测
             cap2 = cv2.VideoCapture(str(video_path))
             cap2.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -989,8 +993,31 @@ def analyze_ball_trajectory(
             cap2.release()
 
             if ret:
-                court_detector = CourtLineDetector()
-                court_keypoints = court_detector.predict(first_frame)
+                height, width = first_frame.shape[:2]
+                court_keypoints = None
+
+                # 优先使用手动标记的 4 角点 + Homography
+                if court_calibration and "points" in court_calibration:
+                    from app.pipeline.court_homography import calibration_to_keypoints
+
+                    progress_cb and progress_cb(85.0, "Computing court via manual calibration + Homography...", None)
+                    court_keypoints = calibration_to_keypoints(
+                        court_calibration["points"], width, height,
+                    )
+                    logger.info(
+                        "Using manual court calibration (%d points) + Homography",
+                        len(court_calibration["points"]),
+                    )
+                else:
+                    # 回退到 ResNet50 自动检测
+                    from app.pipeline.court_line_detector import CourtLineDetector
+
+                    progress_cb and progress_cb(85.0, "Detecting court lines with ResNet50...", None)
+                    court_detector = CourtLineDetector()
+                    court_keypoints = court_detector.predict(first_frame)
+
+                from app.pipeline.mini_court import MiniCourt
+
                 court_keypoints_list = court_keypoints.tolist()
 
                 # 过滤球员（只保留离场地最近的 2 名）
