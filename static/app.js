@@ -543,9 +543,11 @@ async function deleteVideo(v) {
 async function openCalibration(v) {
   state.calibrationVideoId = v.video_id;
   state.calibrationPoints = v.court_calibration ? [...v.court_calibration.points] : [];
+  state.markMode = false;  // 默认播放模式
   const urlR = await fetch(`/video-file/${v.video_id}`).then((r) => r.json());
   $("calibration-video").src = urlR.url;
   showOnly("calibration-section");
+  updateMarkModeUI();
   setupCalibrationCanvas();
 }
 
@@ -566,6 +568,7 @@ function setupCalibrationCanvas() {
   video.addEventListener("loadedmetadata", resize, { once: true });
   if (!calibrationCanvas.dataset.bound) {
     calibrationCanvas.addEventListener("click", (e) => {
+      if (!state.markMode) return;  // 播放模式不响应
       if (state.calibrationPoints.length >= 4) return;
       const rect = calibrationCanvas.getBoundingClientRect();
       state.calibrationPoints.push({
@@ -573,9 +576,29 @@ function setupCalibrationCanvas() {
         y: (e.clientY - rect.top) / rect.height,
       });
       drawCalibration();
+      // 标记完4个点后自动切回播放模式
+      if (state.calibrationPoints.length >= 4) {
+        state.markMode = false;
+        updateMarkModeUI();
+      }
     });
     calibrationCanvas.dataset.bound = "1";
   }
+  updateMarkModeUI();
+}
+
+function updateMarkModeUI() {
+  const canvas = $("calibration-canvas");
+  const btn = $("toggle-mark-btn");
+  if (state.markMode) {
+    canvas.style.pointerEvents = "auto";
+    btn.textContent = "❌ 退出标记模式";
+  } else {
+    canvas.style.pointerEvents = "none";
+    const done = state.calibrationPoints.length;
+    btn.textContent = done >= 4 ? "✅ 标记完成" : `✏️ 标记第 ${done + 1} 个角点`;
+  }
+  $("mark-mode-hint").hidden = !state.markMode;
 }
 
 function drawCalibration() {
@@ -619,9 +642,24 @@ function drawCalibration() {
   });
 }
 
+$("toggle-mark-btn").addEventListener("click", () => {
+  if (state.calibrationPoints.length >= 4) {
+    // 标记已完成：重置才能重新标记
+    state.calibrationPoints = [];
+    state.markMode = true;
+    drawCalibration();
+    updateMarkModeUI();
+    return;
+  }
+  state.markMode = !state.markMode;
+  updateMarkModeUI();
+});
+
 $("reset-calibration-btn").addEventListener("click", () => {
   state.calibrationPoints = [];
+  state.markMode = false;
   drawCalibration();
+  updateMarkModeUI();
 });
 
 $("save-calibration-btn").addEventListener("click", async () => {
@@ -641,7 +679,6 @@ $("save-calibration-btn").addEventListener("click", async () => {
   await refreshLibrary();
   // 返回 library 并提示 Homography 已启用
   showOnly("library-section");
-  const btn = document.querySelector(`[data-video-id="${state.calibrationVideoId}"] ~ td button`);
   setTimeout(() => {
     const statusEl = document.getElementById("status-text");
     if (statusEl) {

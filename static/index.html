@@ -85,13 +85,15 @@
         <span style="color:#cf222e;">❷</span> 近侧右边（底线右下） →
         <span style="color:#cf222e;">❸</span> 远侧右边（底线右上） →
         <span style="color:#cf222e;">❹</span> 远侧左边（底线左上）<br/>
-        <em>提示：播放视频找到清晰展示 4 个球场角的画面后暂停再点击。</em>
+        <em>先播放找到清晰展示 4 个球场角的画面后暂停，再点击下方 "标记第 X 个角点" 按钮进入标记模式。</em>
       </div>
       <div id="calibration-wrap">
         <video id="calibration-video" controls preload="metadata"></video>
         <canvas id="calibration-canvas"></canvas>
       </div>
+      <div id="mark-mode-hint" class="calibration-hint" hidden>🔴 标记模式已开启：点击视频画面添加角点</div>
       <div class="row-between" style="margin-top: 12px">
+        <button id="toggle-mark-btn" class="primary">✏️ 标记第 1 个角点</button>
         <button id="reset-calibration-btn">Reset points</button>
         <button id="save-calibration-btn" class="primary">Save calibration</button>
       </div>
