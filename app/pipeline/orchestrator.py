@@ -235,15 +235,12 @@ async def run_export(export_id: str, video_id: str, segments: list[dict]) -> Non
             rendered_path = settings.exports_dir / f"{export_id}_rendered.mp4"
             video_path = Path(video["filepath"])
 
-            def cb(pct, msg, eta=None):
-                pass
-
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 _get_process_pool(),
                 partial(
                     render_ball_video_from_artifact,
-                    video_path, artifact, rendered_path, cb,
+                    video_path, artifact, rendered_path, None,
                     {"ball_trail": True, "ball_speed": True, "running_speed": True,
                      "skeleton": True, "spark": True, "court_anim": False},
                 ),
