@@ -826,7 +826,7 @@ class MiniCourtPass(RenderPass):
                                 active_tracks[tid] = []
                             active_tracks[tid].append(pos)
             for tid, coords in active_tracks.items():
-                color = track_colors[tid % len(track_colors)]
+                color = track_colors[int(tid) % len(track_colors)]
                 for i in range(1, len(coords)):
                     p1_c = coords[i - 1]
                     p2_c = coords[i]
