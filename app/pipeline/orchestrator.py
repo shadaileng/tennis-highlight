@@ -228,7 +228,7 @@ async def run_export(export_id: str, video_id: str, segments: list[dict]) -> Non
             None
         )
 
-        if ball_analysis and ball_analysis.get("artifact_path"):
+        if ball_analysis and ball_analysis["artifact_path"]:
             # 先渲染完整视频（带覆盖层）
             artifact_path = Path(ball_analysis["artifact_path"])
             artifact = load_ball_artifact(artifact_path)
