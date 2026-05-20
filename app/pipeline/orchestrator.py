@@ -106,7 +106,7 @@ async def run_analysis(analysis_id: str) -> None:
             # This is the main fix for preventing service lock-up during YOLO inference
             video = await get_video(video_id)
             court_calibration = None
-            if video and video.get("court_calibration_json"):
+            if video and video["court_calibration_json"]:
                 court_calibration = json.loads(video["court_calibration_json"])
             loop = asyncio.get_running_loop()
             artifact_path, artifact, video_output_path = await loop.run_in_executor(

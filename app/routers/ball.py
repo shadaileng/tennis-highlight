@@ -53,7 +53,7 @@ async def start_ball_analysis(
     # 读取 court_calibration（如果有手动标记的球场）
     video = await get_video(analysis["video_id"])
     court_calibration = None
-    if video and video.get("court_calibration_json"):
+    if video and video["court_calibration_json"]:
         court_calibration = json.loads(video["court_calibration_json"])
 
     async def run():
@@ -166,7 +166,7 @@ async def start_ball_analysis_from_video(
 
     # 读取 court_calibration（如果有手动标记的球场）
     court_calibration = None
-    if video.get("court_calibration_json"):
+    if video["court_calibration_json"]:
         court_calibration = json.loads(video["court_calibration_json"])
 
     ball_analysis_id = await create_analysis(
