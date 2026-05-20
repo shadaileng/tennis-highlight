@@ -806,6 +806,7 @@ def analyze_ball_trajectory(
     progress_cb: ProgressCallback | None = None,
     render_options: dict | None = None,
     court_calibration: dict | None = None,
+    render_video: bool = False,
 ) -> tuple[Path, dict, Path | None]:
     """
     使用 YOLO 模型检测网球并生成轨迹数据
@@ -815,6 +816,8 @@ def analyze_ball_trajectory(
             {"points": [{"x": 0-1, "y": 0-1}, ...]}
             提供时优先使用 Homography 代替 ResNet50 自动检测
             None 时回退到 ResNet50
+        render_video: 是否生成带可视化叠加层的视频。默认 False，
+            分析仅产出 artifact，前端实时绘制。导出时再渲染视频。
 
     返回:
         (artifact_path, artifact, video_output_path)
@@ -1191,38 +1194,39 @@ def analyze_ball_trajectory(
     with gzip.open(artifact_path, "wt", encoding="utf-8") as f:
         json.dump(artifact, f)
 
-    # 生成带轨迹的视频
+    # 生成带轨迹的视频（仅当 render_video=True 时）
     video_output_path = None
-    try:
-        if progress_cb:
-            progress_cb(90.0, "Generating video with ball trajectory...", None)
+    if render_video:
+        try:
+            if progress_cb:
+                progress_cb(90.0, "Generating video with ball trajectory...", None)
 
-        settings.ball_videos_dir.mkdir(parents=True, exist_ok=True)
-        video_output_path = settings.ball_videos_dir / f"{analysis_id}_ball_trajectory.mp4"
+            settings.ball_videos_dir.mkdir(parents=True, exist_ok=True)
+            video_output_path = settings.ball_videos_dir / f"{analysis_id}_ball_trajectory.mp4"
 
-        draw_ball_trajectory_video(
-            video_path=video_path,
-            ball_detections=interpolated_detections,
-            output_path=video_output_path,
-            range_start_s=range_start_s,
-            sample_fps=sample_fps,
-            progress_cb=progress_cb,
-            hit_moments=hit_moments,
-            player_detections=filtered_player_detections if filtered_player_detections and any(filtered_player_detections) else None,
-            speed_events=speed_events,
-            court_coordinates=court_coordinates,
-            ball_mini_coords=ball_mini_coords if ball_mini_coords else None,
-            player_mini_coords=player_mini_coords if player_mini_coords else None,
-            player_keypoints=player_keypoints,
-            render_options=render_options,
-        )
-        logger.info(f"Ball trajectory video saved to: {video_output_path}")
+            draw_ball_trajectory_video(
+                video_path=video_path,
+                ball_detections=interpolated_detections,
+                output_path=video_output_path,
+                range_start_s=range_start_s,
+                sample_fps=sample_fps,
+                progress_cb=progress_cb,
+                hit_moments=hit_moments,
+                player_detections=filtered_player_detections if filtered_player_detections and any(filtered_player_detections) else None,
+                speed_events=speed_events,
+                court_coordinates=court_coordinates,
+                ball_mini_coords=ball_mini_coords if ball_mini_coords else None,
+                player_mini_coords=player_mini_coords if player_mini_coords else None,
+                player_keypoints=player_keypoints,
+                render_options=render_options,
+            )
+            logger.info(f"Ball trajectory video saved to: {video_output_path}")
 
-    except Exception as e:
-        logger.warning(f"Failed to generate ball trajectory video: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-        video_output_path = None
+        except Exception as e:
+            logger.warning(f"Failed to generate ball trajectory video: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            video_output_path = None
 
     if progress_cb:
         progress_cb(100.0, f"Done: {valid_count} ball detections", None)

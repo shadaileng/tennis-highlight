@@ -12,12 +12,13 @@ from app.database import (
     get_analysis_run,
     get_export,
     get_video,
+    list_analysis_runs,
     replace_segments,
     update_analysis_progress_sync,
     update_analysis_status,
     update_export,
 )
-from app.pipeline.ball_tracking import BALL_ALGORITHM, analyze_ball_trajectory
+from app.pipeline.ball_tracking import BALL_ALGORITHM, analyze_ball_trajectory, load_ball_artifact
 from app.pipeline.ffmpeg_utils import probe_duration
 from app.pipeline.motion_analysis import (
     analyze_video_to_artifact,
@@ -26,6 +27,7 @@ from app.pipeline.motion_analysis import (
 )
 from app.pipeline.pose_analysis import POSE_ALGORITHM, analyze_pose_to_artifact
 from app.pipeline.video_editor import export_segments
+from app.pipeline.video_renderer import render_ball_video_from_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,7 @@ async def run_analysis(analysis_id: str) -> None:
                     partial(_progress_cb, analysis_id),
                     None,  # render_options
                     court_calibration,
+                    render_video=False,
                 ),
             )
             # Ball analysis doesn't produce segments, create a default full-video segment
@@ -190,7 +193,10 @@ async def run_analysis(analysis_id: str) -> None:
 
 
 async def run_export(export_id: str, video_id: str, segments: list[dict]) -> None:
-    """Background task: stitch user-selected segments into a final video."""
+    """Background task: stitch user-selected segments into a final video.
+    If a ball_tracking_yolo analysis exists for this video, render with
+    artifact overlays before cutting segments.
+    """
     started = time.monotonic()
     try:
         await update_export(export_id, status="exporting")
@@ -213,9 +219,48 @@ async def run_export(export_id: str, video_id: str, segments: list[dict]) -> Non
         )
 
         output_path = settings.exports_dir / f"{export_id}.mp4"
-        await export_segments(
-            Path(video["filepath"]), on_pairs, output_path, export_id
+
+        # 检查是否有 ball_tracking_yolo 分析，有则用 artifact 渲染再剪切
+        all_analyses = await list_analysis_runs()
+        ball_analysis = next(
+            (a for a in all_analyses
+             if a["video_id"] == video_id and a["algorithm"] == BALL_ALGORITHM and a["status"] == "done"),
+            None
         )
+
+        if ball_analysis and ball_analysis.get("artifact_path"):
+            # 先渲染完整视频（带覆盖层）
+            artifact_path = Path(ball_analysis["artifact_path"])
+            artifact = load_ball_artifact(artifact_path)
+            rendered_path = settings.exports_dir / f"{export_id}_rendered.mp4"
+            video_path = Path(video["filepath"])
+
+            def cb(pct, msg, eta=None):
+                pass
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                _get_process_pool(),
+                partial(
+                    render_ball_video_from_artifact,
+                    video_path, artifact, rendered_path, cb,
+                    {"ball_trail": True, "ball_speed": True, "running_speed": True,
+                     "skeleton": True, "spark": True, "court_anim": False},
+                ),
+            )
+            logger.info("render complete for export %s, cutting segments", export_id)
+            # 再剪切分段
+            await export_segments(rendered_path, on_pairs, output_path, export_id)
+            # 清理临时渲染文件
+            try:
+                rendered_path.unlink()
+            except OSError:
+                pass
+        else:
+            # 无 ball tracking 分析，直接纯剪切
+            await export_segments(
+                Path(video["filepath"]), on_pairs, output_path, export_id
+            )
 
         duration_s = await probe_duration(output_path)
         await update_export(

@@ -77,6 +77,7 @@ async def start_ball_analysis(
                     range_end_s=analysis["range_end_s"] or analysis["duration_s"],
                     progress_cb=progress_cb,
                     court_calibration=court_calibration,
+                    render_video=False,
                 ),
             )
             elapsed = time.time() - start_time
@@ -135,6 +136,83 @@ async def get_ball_trajectory(analysis_id: str):
         "trajectory": trajectory,
         "summary": artifact.get("summary", {}),
         "metadata": metadata,
+    }
+
+
+@router.get("/analysis/{analysis_id}/render-data")
+async def get_ball_render_data(analysis_id: str):
+    """获取 ball tracking 分析的全部渲染数据，用于前端 canvas 绘制覆盖层。
+
+    返回 artifact 中所有渲染所需数据（轨迹、击球、速度、球场、骨骼、迷你球场）。
+    """
+    artifact_path = settings.analysis_dir / f"{analysis_id}.ball.json.gz"
+    if not artifact_path.exists():
+        raise HTTPException(404, "artifact not found for this analysis")
+
+    artifact = load_ball_artifact(artifact_path)
+    metadata = artifact.get("metadata", {})
+    w = metadata.get("video_width", 1920)
+    h = metadata.get("video_height", 1080)
+    fps = metadata.get("video_fps", 30.0)
+
+    # 遍历 ball_detections 生成归一化轨迹
+    ball_detections = artifact.get("ball_detections", [])
+    trajectory = []
+    for i, det in enumerate(ball_detections):
+        bbox = det.get(1) or det.get("1")
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
+            trajectory.append({
+                "time_s": metadata.get("range_start_s", 0) + i / fps,
+                "x": (x1 + x2) / 2 / w,
+                "y": (y1 + y2) / 2 / h,
+                "bbox": {"x1": x1 / w, "y1": y1 / h, "x2": x2 / w, "y2": y2 / h},
+            })
+
+    # hit_moments — 转换球位归一化
+    hit_moments = artifact.get("hit_moments", [])
+    for hm in hit_moments:
+        ball_pos = hm.get("ball_pos")
+        if ball_pos and len(ball_pos) >= 2 and w and h:
+            hm["x_norm"] = ball_pos[0] / w
+            hm["y_norm"] = ball_pos[1] / h
+
+    # speed_events — 球速/跑动速度归一化
+    speed_events = artifact.get("speed_events", None)
+    if speed_events:
+        for bs in speed_events.get("ball_speeds", []):
+            ball_pos = bs.get("ball_pos")
+            if ball_pos and len(ball_pos) >= 2 and w and h:
+                bs["x_norm"] = ball_pos[0] / w
+                bs["y_norm"] = ball_pos[1] / h
+            if "speed_ms" in bs and "speed_mps" not in bs:
+                bs["speed_mps"] = bs["speed_ms"]
+        for ps in speed_events.get("player_speeds", []):
+            start_pos = ps.get("start_pos")
+            end_pos = ps.get("end_pos")
+            if start_pos and len(start_pos) >= 2 and w and h:
+                ps["start_xn"] = start_pos[0] / w
+                ps["start_yn"] = start_pos[1] / h
+            if end_pos and len(end_pos) >= 2 and w and h:
+                ps["end_xn"] = end_pos[0] / w
+                ps["end_yn"] = end_pos[1] / h
+            ps["frame_idx"] = ps.get("start_frame", 0)
+            if "speed_ms" in ps and "speed_mps" not in ps:
+                ps["speed_mps"] = ps["speed_ms"]
+
+    player_keypoints = artifact.get("player_keypoints", None)
+    court_coordinates = artifact.get("court_coordinates", None)
+    ball_mini_coords = artifact.get("ball_mini_coords", [])
+
+    return {
+        "trajectory": trajectory,
+        "hit_moments": hit_moments,
+        "speed_events": speed_events,
+        "player_keypoints": player_keypoints,
+        "court_coordinates": court_coordinates,
+        "ball_mini_coords": ball_mini_coords,
+        "metadata": metadata,
+        "summary": artifact.get("summary", {}),
     }
 
 
@@ -200,6 +278,7 @@ async def start_ball_analysis_from_video(
                     progress_cb=progress_cb,
                     render_options=req.render_options,
                     court_calibration=court_calibration,
+                    render_video=False,
                 ),
             )
             elapsed = time.time() - start_time

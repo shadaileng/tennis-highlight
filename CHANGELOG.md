@@ -1,5 +1,37 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-20 16:38:00 (UTC+8)
+
+### refactor: 分析仅产 artifact + 前端 canvas 实时绘制 + 导出时渲染
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/pipeline/ball_tracking.py | 新增 `render_video=False` 参数，视频渲染改为条件执行 |
+| app/pipeline/orchestrator.py | run_analysis 传 `render_video=False`；run_export 检测 ball tracking 分析后走 artifact 渲染再剪切 |
+| app/routers/ball.py | 新增 `GET /analysis/{analysis_id}/render-data` 端点；两处分析调用传 `render_video=False` |
+| static/app.js | 新增 `loadRenderData()`、`drawRenderOverlay()` 全层绘制；editor 改用原始视频 URL；隐藏 Download 按钮 |
+
+### 详细说明
+
+1. **架构改造**：分析阶段默认跳过视频渲染（`render_video=False`），仅产出 `.ball.json.gz` artifact。前端加载 artifact 数据后，在 canvas 实时绘制所有覆盖层（轨迹、击球火花、球速文本、跑动速度连线）。导出时后端从 artifact + 原视频渲染覆盖层后再剪切分段。
+
+2. **后端**：
+   - `ball_tracking.py`：`analyze_ball_trajectory()` 新增 `render_video` 参数，渲染块加 `if render_video:` 保护
+   - `orchestrator.py`：`run_analysis` 传 `render_video=False`；`run_export` 检测当前视频是否有 ball_tracking_yolo 分析，有则先 `render_ball_video_from_artifact` 渲染再 `export_segments` 剪切
+   - `ball.py`：新增 `GET /analysis/{analysis_id}/render-data` 返回完整渲染数据（轨迹/击球/球速/跑动速度/骨骼/球场/迷你球场坐标，坐标均归一化）
+
+3. **前端**：
+   - `drawRenderOverlay()` 统一画布清理、视频区域计算，依次绘制 4 个效果层
+   - 击球火花：冲击波扩散圆环 + 菱形碎片飞出
+   - 球速文本：`P{n} X.X m/s` 青色发光文本，持续 0.8s
+   - 跑动速度：虚线动画连线 + 移动圆点 + 速度文本
+   - 球轨迹：原有拖尾效果不变（复用 `drawBallTrailOnCtx`）
+
+4. **预期效果**：分析速度提升 40-60%（省掉整视频 OpenCV 逐帧读取 + ffmpeg pipe 编码）；预览交互性提升（切换效果即时响应）；导出视频质量更高（从原始视频一次性渲染）。
+
+---
+
 ## 2026-05-20 21:20:00 (UTC+8)
 
 ### docs: 更新 README 并新增中文文档 README.zh-CN.md

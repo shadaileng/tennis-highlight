@@ -19,6 +19,12 @@ const state = {
   ballAnalysisId: null,
   ballVideoPath: null, // Path to ball trajectory MP4 video
   analysesEditMode: false, // Whether analyses table is in edit mode
+  renderData: null,     // Full render data from artifact
+  hitMoments: [],
+  speedEvents: null,
+  playerKeypoints: null,
+  courtCoordinates: null,
+  ballMiniCoords: [],
 };
 
 // Per-detector config schemas — single source of truth for which knobs/badges
@@ -489,13 +495,14 @@ async function loadEditorWithBallTrajectory(videoId, ballAnalysisId) {
     ballCanvas._resizeObserver?.disconnect();
     ballCanvas._resizeObserver = new ResizeObserver(() => {
       console.log("[BallTrail] Canvas resized, redrawing");
-      drawBallTrail();
+      drawRenderOverlay();
     });
     ballCanvas._resizeObserver.observe(ballCanvas);
   }
 
   // Load ball trajectory data
   await loadBallTrajectory();
+  await loadRenderData();
 
   // Auto-enable ball trail display
   $("ball-trail-toggle").checked = true;
@@ -503,11 +510,11 @@ async function loadEditorWithBallTrajectory(videoId, ballAnalysisId) {
   // Wait for video to be ready before drawing
   const video = $("player");
   if (video.readyState >= 1) {
-    drawBallTrail();
+    drawRenderOverlay();
   } else {
     video.addEventListener("loadedmetadata", () => {
       console.log("[BallTrail] Video metadata loaded, drawing trail");
-      drawBallTrail();
+      drawRenderOverlay();
     }, { once: true });
   }
 
@@ -515,21 +522,9 @@ async function loadEditorWithBallTrajectory(videoId, ballAnalysisId) {
   const panel = $("ball-trail-panel");
   if (panel) panel.hidden = false;
 
-  // Check if ball trajectory video is available
+  // 隐藏 Download button（分析不再渲染视频，由前端实时绘制）
   const downloadBtn = $("download-ball-video-btn");
-  if (downloadBtn) {
-    // Video availability is checked via analysis data
-    if (analysisR && analysisR.metadata && analysisR.metadata.detector === "ball_tracking_yolo") {
-      // Check if video_path is available in analyses list
-      fetch("/analyses").then(r => r.json()).then(analyses => {
-        const ballAnalysis = analyses.find(a => a.analysis_id === ballAnalysisId);
-        if (ballAnalysis && ballAnalysis.video_path) {
-          state.ballVideoPath = ballAnalysis.video_path;
-          downloadBtn.hidden = false;
-        }
-      }).catch(() => {});
-    }
-  }
+  if (downloadBtn) downloadBtn.hidden = true;
 
   renderAll();
 }
@@ -908,14 +903,9 @@ async function loadEditor() {
   $("analyses-section").hidden = true;
   state.pollingAnalyses = false;  // Stop any ongoing analysis polling
 
-  // For ball_tracking_yolo, use the rendered ball trajectory video instead of original
-  let videoUrl;
-  if (state.ballAnalysisId) {
-    videoUrl = `/analysis/${state.ballAnalysisId}/ball-video`;
-  } else {
-    const urlR = await fetch(`/video-file/${state.videoId}`).then((r) => r.json());
-    videoUrl = urlR.url;
-  }
+  // 不再使用渲染视频，始终使用原始视频（分析不再渲染视频）
+  const urlR = await fetch(`/video-file/${state.videoId}`).then((r) => r.json());
+  videoUrl = urlR.url;
 
   const [segR, analysisR] = await Promise.all([
     fetch(`/analysis-segments/${state.analysisId}`).then((r) => r.json()),
@@ -935,6 +925,7 @@ async function loadEditor() {
   setupCanvas();
   setupPlayer();
   loadBallTrajectory();
+  loadRenderData();
 }
 
 function renderAll() {
@@ -1153,7 +1144,7 @@ function setupPlayer() {
   const player = $("player");
   player.addEventListener("timeupdate", () => {
     drawTimeline();
-    drawBallTrail();
+    drawRenderOverlay();
     $("player-time").textContent = `${fmt(player.currentTime)} / ${fmt(state.duration)}`;
 
     if (state.playMode === "segment" && state.segmentEndS !== null) {
@@ -1167,6 +1158,31 @@ function setupPlayer() {
 }
 
 // Ball Trail --------------------------------------------------------------
+
+async function loadRenderData() {
+  if (!state.analysisId) {
+    console.warn("[RenderData] No analysisId, skipping load");
+    return;
+  }
+  try {
+    const data = await fetch(`/analysis/${state.analysisId}/render-data`).then(r => r.json());
+    state.renderData = data;
+    state.hitMoments = data.hit_moments || [];
+    state.speedEvents = data.speed_events || null;
+    state.playerKeypoints = data.player_keypoints || null;
+    state.courtCoordinates = data.court_coordinates || null;
+    state.ballMiniCoords = data.ball_mini_coords || [];
+    console.log("[RenderData] Loaded:", {
+      hitMoments: state.hitMoments.length,
+      ballSpeeds: state.speedEvents?.ball_speeds?.length || 0,
+      playerSpeeds: state.speedEvents?.player_speeds?.length || 0,
+      hasKeypoints: !!state.playerKeypoints,
+    });
+  } catch (e) {
+    console.warn("[RenderData] Failed to load:", e.message);
+    state.renderData = null;
+  }
+}
 
 async function loadBallTrajectory() {
   if (!state.analysisId) {
@@ -1371,11 +1387,276 @@ $("ball-trail-toggle").addEventListener("change", () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
   } else {
-    // When checked, trigger a draw
     console.log("[BallTrail] Toggle checked, drawing trail");
-    drawBallTrail();
+    drawRenderOverlay();
   }
 });
+
+// Render Overlay — 在 canvas 上实时绘制所有效果层 --------------------
+
+const COCO_EDGES = [
+  [5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],
+];
+
+function drawRenderOverlay() {
+  const canvas = $("ball-trail-canvas");
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+  const video = $("player");
+  if (!video) return;
+
+  const rect = video.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const newW = Math.max(1, rect.width * dpr);
+  const newH = Math.max(1, rect.height * dpr);
+  if (canvas.width !== newW || canvas.height !== newH) {
+    canvas.width = newW;
+    canvas.height = newH;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+
+  const canvasW = canvas.clientWidth;
+  const canvasH = canvas.clientHeight;
+  const videoW = video.videoWidth || 1920;
+  const videoH = video.videoHeight || 1080;
+
+  // 计算视频显示区域（object-fit: contain）
+  const videoRatio = videoW / videoH;
+  const canvasRatio = canvasW / canvasH;
+  let displayW, displayH, offsetX, offsetY;
+  if (videoRatio > canvasRatio) {
+    displayW = canvasW;
+    displayH = canvasW / videoRatio;
+    offsetX = 0;
+    offsetY = (canvasH - displayH) / 2;
+  } else {
+    displayH = canvasH;
+    displayW = canvasH * videoRatio;
+    offsetX = (canvasW - displayW) / 2;
+    offsetY = 0;
+  }
+
+  const timeOffset = 2 / 30; // 约0.067秒时间补偿
+  const currentTime = Math.min((video.currentTime || 0) + timeOffset, state.duration);
+  const fps = 30;
+
+  // 1. 球轨迹（原有 drawBallTrail 逻辑）
+  if ($("ball-trail-toggle")?.checked) {
+    drawBallTrailOnCtx(ctx, canvasW, canvasH, displayW, displayH, offsetX, offsetY, currentTime);
+  }
+
+  // 2. 击球火花效果
+  const ballSpeedToggle = $("opt-ball-speed")?.checked !== false;
+  if (ballSpeedToggle || $("opt-spark")?.checked !== false) {
+    for (const hm of state.hitMoments) {
+      const hitFrame = hm.frame_idx;
+      const hitTime = hitFrame / fps;
+      const elapsed = currentTime - hitTime;
+      if (elapsed >= 0 && elapsed < 0.6) {
+        const hx = offsetX + (hm.x_norm || 0) * displayW;
+        const hy = offsetY + (hm.y_norm || 0) * displayH;
+        const progress = elapsed / 0.6; // 0→1
+        const alpha = 1 - progress;
+
+        // 击球冲击波（扩散圆环）
+        const burstRadius = 10 + progress * 40;
+        const gradient = ctx.createRadialGradient(hx, hy, 0, hx, hy, burstRadius);
+        gradient.addColorStop(0, `rgba(255, 255, 200, ${alpha * 0.6})`);
+        gradient.addColorStop(0.3, `rgba(255, 200, 50, ${alpha * 0.3})`);
+        gradient.addColorStop(1, `rgba(255, 150, 0, 0)`);
+        ctx.beginPath();
+        ctx.arc(hx, hy, burstRadius, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // 菱形火花飞出
+        const diamondCount = Math.floor(15 * (1 - progress * 0.5));
+        for (let i = 0; i < diamondCount; i++) {
+          const angle = (i / diamondCount) * Math.PI * 2 + progress * 2;
+          const dist = progress * (20 + (i % 5) * 12);
+          const dx = Math.cos(angle) * dist;
+          const dy = Math.sin(angle) * dist;
+          const dLen = 6 - progress * 3;
+          const dWid = 2 - progress * 1;
+          ctx.save();
+          ctx.translate(hx + dx, hy + dy);
+          ctx.rotate(angle);
+          ctx.globalAlpha = Math.max(0, alpha * 0.8);
+          ctx.fillStyle = `rgba(255, ${220 - progress * 100}, 50, ${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(dLen * 0.5, 0);
+          ctx.lineTo(0, -dWid);
+          ctx.lineTo(-dLen * 0.5, 0);
+          ctx.lineTo(0, dWid);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  // 3. 球速文本
+  if ($("opt-ball-speed")?.checked !== false && state.speedEvents) {
+    for (const bs of state.speedEvents.ball_speeds || []) {
+      const hitFrame = bs.frame_idx || 0;
+      const hitTime = hitFrame / fps;
+      const elapsed = currentTime - hitTime;
+      if (elapsed >= 0 && elapsed < 0.8) {
+        const progress = elapsed / 0.8;
+        const alpha = 1 - progress;
+        const sx = offsetX + (bs.x_norm || 0) * displayW;
+        const sy = offsetY + (bs.y_norm || 0) * displayH - 30;
+        const playerId = bs.player_id || bs.hitter_id || "";
+        const speedVal = bs.speed_mps != null ? bs.speed_mps : (bs.speed_ms || 0);
+        const label = playerId ? `P${playerId} ${speedVal.toFixed(1)} m/s` : `${speedVal.toFixed(1)} m/s`;
+
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, alpha);
+        ctx.font = "bold 18px sans-serif";
+        ctx.textAlign = "center";
+        // 外发光
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = `rgba(0, 200, 255, ${alpha * 0.5})`;
+        ctx.fillStyle = `rgba(0, 220, 255, ${alpha})`;
+        ctx.fillText(label, sx, sy);
+        ctx.restore();
+      }
+    }
+  }
+
+  // 4. 跑动速度连线
+  if ($("opt-running-speed")?.checked !== false && state.speedEvents) {
+    for (const ps of state.speedEvents.player_speeds || []) {
+      const startFrame = ps.start_frame || ps.frame_idx || 0;
+      const endFrame = ps.end_frame || (startFrame + fps);
+      const startTime = startFrame / fps;
+      const endTime = endFrame / fps;
+      const currentFrame = currentTime * fps;
+
+      if (currentTime >= startTime && currentTime <= endTime) {
+        const progress = (currentTime - startTime) / (endTime - startTime);
+        const alpha = Math.min(1, (1 - progress) * 1.5);
+
+        const sx = offsetX + (ps.start_xn || 0) * displayW;
+        const sy = offsetY + (ps.start_yn || 0) * displayH;
+        const ex = offsetX + (ps.end_xn || 0) * displayW;
+        const ey = offsetY + (ps.end_yn || 0) * displayH;
+
+        // 动画延伸点
+        const animX = sx + (ex - sx) * Math.min(1, progress * 1.5);
+        const animY = sy + (ey - sy) * Math.min(1, progress * 1.5);
+
+        // 连线
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, alpha);
+        ctx.strokeStyle = "rgba(255, 220, 50, 0.6)";
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(animX, animY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 端点圆点（移动端）
+        ctx.beginPath();
+        ctx.arc(animX, animY, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 220, 50, 0.8)";
+        ctx.fill();
+
+        // 速度文本
+        const speedVal = ps.speed_mps != null ? ps.speed_mps : (ps.speed_ms || 0);
+        const label = `${speedVal.toFixed(1)} m/s`;
+        ctx.font = "bold 14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(255, 220, 50, 0.9)";
+        ctx.fillText(label, (sx + animX) / 2, (sy + animY) / 2 - 8);
+        ctx.restore();
+      }
+    }
+  }
+}
+
+// 从 drawBallTrail 抽取的轨迹绘制逻辑（供 drawRenderOverlay 调用）
+function drawBallTrailOnCtx(ctx, canvasW, canvasH, displayW, displayH, offsetX, offsetY, currentTime) {
+  if (!state.ballTrajectory.length) return;
+
+  const trailDuration = 0.5;
+  const maxTrailPoints = 15;
+
+  const allDetectedPoints = state.ballTrajectory
+    .filter(p => p.x !== null && p.time_s <= currentTime)
+    .sort((a, b) => a.time_s - b.time_s);
+
+  if (allDetectedPoints.length === 0) return;
+
+  let trailPoints = allDetectedPoints
+    .filter(p => (currentTime - p.time_s) <= trailDuration)
+    .slice(-maxTrailPoints);
+
+  if (trailPoints.length >= 2) {
+    const latest = trailPoints[trailPoints.length - 1];
+    const prev = trailPoints[trailPoints.length - 2];
+    const gap = latest.time_s - prev.time_s;
+    if (gap > 0) {
+      const t = (currentTime - latest.time_s) / gap;
+      if (t > 0 && t <= 1) {
+        const interpX = latest.x + (latest.x - prev.x) * t * 0.5;
+        const interpY = latest.y + (latest.y - prev.y) * t * 0.5;
+        trailPoints.push({ time_s: currentTime, x: interpX, y: interpY });
+      }
+    }
+  }
+
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  for (let i = 1; i < trailPoints.length; i++) {
+    const p1 = trailPoints[i - 1];
+    const p2 = trailPoints[i];
+    const age = currentTime - p2.time_s;
+    const progress = Math.max(0, 1 - age / trailDuration);
+
+    const alpha = progress * 0.9;
+    const lineWidth = 2 + progress * 6;
+    const x1 = offsetX + p1.x * displayW;
+    const y1 = offsetY + p1.y * displayH;
+    const x2 = offsetX + p2.x * displayW;
+    const y2 = offsetY + p2.y * displayH;
+
+    ctx.save();
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = `rgba(255, 200, 0, ${alpha * 0.8})`;
+    ctx.strokeStyle = `rgba(255, 220, 50, ${alpha})`;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const currentPoint = trailPoints[trailPoints.length - 1];
+  const bx = offsetX + currentPoint.x * displayW;
+  const by = offsetY + currentPoint.y * displayH;
+
+  const gradient = ctx.createRadialGradient(bx, by, 0, bx, by, 25);
+  gradient.addColorStop(0, 'rgba(255, 255, 150, 0.9)');
+  gradient.addColorStop(0.3, 'rgba(255, 220, 50, 0.6)');
+  gradient.addColorStop(1, 'rgba(255, 150, 0, 0)');
+  ctx.beginPath();
+  ctx.arc(bx, by, 25, 0, Math.PI * 2);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(bx, by, 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 1)';
+  ctx.fill();
+}
 
 function playSegment(i) {
   const seg = state.segments[i];
