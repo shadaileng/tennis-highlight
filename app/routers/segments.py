@@ -165,7 +165,9 @@ async def calibration_frame(video_id: str) -> Response:
 
     result = subprocess.run(
         ["ffmpeg", "-y", "-i", str(original), "-ss", "1",
-         "-vframes", "1", "-q:v", "2", "-f", "image2pipe", "-"],
+         "-vframes", "1", "-q:v", "2",
+         "-vf", "scale='min(1280,iw)':-2",
+         "-f", "image2pipe", "-"],
         capture_output=True, timeout=60,
     )
     if result.returncode != 0 or not result.stdout:

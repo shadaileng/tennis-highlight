@@ -543,7 +543,6 @@ async function deleteVideo(v) {
 async function openCalibration(v) {
   state.calibrationVideoId = v.video_id;
   state.calibrationPoints = v.court_calibration ? [...v.court_calibration.points] : [];
-  $("calibration-frame").src = `/calibration-frame/${v.video_id}`;
   showOnly("calibration-section");
   setupCalibrationCanvas();
 }
@@ -552,25 +551,40 @@ let calibrationCanvas, calibrationCtx;
 function setupCalibrationCanvas() {
   calibrationCanvas = $("calibration-canvas");
   calibrationCtx = calibrationCanvas.getContext("2d");
-  const img = $("calibration-frame");
-  const resize = () => {
-    const rect = img.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
+
+  // 直接用 Image 对象加载视频帧，绘制到 canvas 上，消除坐标偏移
+  const img = new Image();
+  img.onload = () => {
+    const maxW = Math.min(window.innerWidth - 40, img.naturalWidth);
+    const maxH = Math.min(window.innerHeight * 0.6, img.naturalHeight);
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    let dispW, dispH;
+    if (maxW / maxH > imgRatio) {
+      dispH = maxH;
+      dispW = maxH * imgRatio;
+    } else {
+      dispW = maxW;
+      dispH = maxW / imgRatio;
+    }
+
     const dpr = window.devicePixelRatio || 1;
-    calibrationCanvas.width = Math.max(1, rect.width * dpr);
-    calibrationCanvas.height = Math.max(1, rect.height * dpr);
+    calibrationCanvas.style.width = `${dispW}px`;
+    calibrationCanvas.style.height = `${dispH}px`;
+    calibrationCanvas.width = Math.max(1, dispW * dpr);
+    calibrationCanvas.height = Math.max(1, dispH * dpr);
     calibrationCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    calibrationCanvas._calibImg = img;
     drawCalibration();
   };
-  img.addEventListener("load", resize, { once: true });
-  resize();
+  img.src = `/calibration-frame/${state.calibrationVideoId}`;
+
   if (!calibrationCanvas.dataset.bound) {
     calibrationCanvas.addEventListener("click", (e) => {
       if (state.calibrationPoints.length >= 4) return;
-      const rect = calibrationCanvas.getBoundingClientRect();
       state.calibrationPoints.push({
-        x: (e.clientX - rect.left) / rect.width,
-        y: (e.clientY - rect.top) / rect.height,
+        x: e.offsetX / calibrationCanvas.clientWidth,
+        y: e.offsetY / calibrationCanvas.clientHeight,
       });
       drawCalibration();
     });
@@ -584,6 +598,13 @@ function drawCalibration() {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
   calibrationCtx.clearRect(0, 0, w, h);
+
+  // 先把视频帧画到 canvas 上（与点击坐标完全对齐）
+  const img = canvas._calibImg;
+  if (img) {
+    calibrationCtx.drawImage(img, 0, 0, w, h);
+  }
+
   const pts = state.calibrationPoints;
   if (!pts.length) return;
   calibrationCtx.strokeStyle = "#f2cc60";

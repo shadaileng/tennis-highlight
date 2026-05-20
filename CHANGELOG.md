@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-20 21:05:00 (UTC+8)
+
+### fix: 校准页面图片缩放适配 + ffmpeg 输出限宽
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/routers/segments.py | `/calibration-frame` 端点添加 `-vf scale` 参数，限制输出宽度 ≤1280px |
+| static/app.js | 用 `new Image()` 直接绘制到 canvas 替代 `#calibration-frame` 元素，消除坐标偏移 |
+| static/style.css | `#calibration-frame` 改为 `display:none`，`#calibration-canvas` 改为块级居中布局 |
+
+### 详细说明
+
+1. 做了什么：修复校准页面中 canvas 坐标偏移问题（图片缩放后点击位置与实际标记点不对应），以及超大分辨率视频首帧缩略图过大的问题。
+2. 怎么做的：前端改用 `Image` 对象直接加载后按 `min(窗口宽-40, 原始宽) × 0.6vh` 等比缩放绘制到 canvas；后端 ffmpeg 增加 `scale='min(1280,iw)':-2` 限制输出宽度，减少网络传输量。
+3. 预期效果：点击位置与标记点完全对齐；高分辨率视频的首帧不会超出窗口；刷新即可替换为优化版本，无需清除缓存（仅后端改动）。
+
+---
+
 ## 2026-05-20 20:50:00 (UTC+8)
 
 ### refactor: 首帧截图代替视频播放器实现球场校准
