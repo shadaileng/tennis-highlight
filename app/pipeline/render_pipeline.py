@@ -474,7 +474,7 @@ class BallTrajectoryPass(RenderPass):
             if track_id not in self.trajectory_points:
                 self.trajectory_points[track_id] = []
             self.trajectory_points[track_id].append((cx, cy))
-            ball_color = self.trajectory_colors[track_id % len(self.trajectory_colors)]
+            ball_color = self.trajectory_colors[int(track_id) % len(self.trajectory_colors)]
             pts = self.trajectory_points[track_id]
             if len(pts) >= 2:
                 trail_length = min(7, len(pts))
