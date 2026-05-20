@@ -174,57 +174,22 @@
           <h2>Tennis Ball Trail</h2>
           <div>
             <label class="muted" style="margin-right: 12px"><input id="ball-trail-toggle" type="checkbox" /> Show trail</label>
-            <button id="download-ball-video-btn" class="primary" hidden>Download Video with Trajectory</button>
           </div>
         </div>
         <div id="ball-trail-summary" class="muted"></div>
       </div>
 
       <div class="card">
-        <h2>Timeline</h2>
-        <div id="timeline-wrap">
-          <canvas id="timeline" height="56"></canvas>
-        </div>
-        <div class="legend">
-          <span class="legend-on"></span> ON (in play)
-          <span class="legend-off"></span> OFF (cut)
-          <span class="muted">Click a segment to toggle on/off. Click the timeline to seek.</span>
-        </div>
+        <button id="export-btn" class="primary">Export Rendered Video</button>
       </div>
 
-
-      <div class="card">
-        <div class="row-between">
-          <h2>Segments</h2>
-          <div class="muted" id="summary"></div>
-        </div>
-        <table id="segments-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>On</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>Duration</th>
-              <th>Score</th>
-              <th>Stage</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="segments-tbody"></tbody>
-        </table>
-        <div class="row-between" style="margin-top: 12px">
-          <button id="export-btn" class="primary">Export Video</button>
-        </div>
-      </div>
-
-      <!-- Phase 4: Export status / download -->
+      <!-- Export status / download -->
       <section id="export-section" class="card" hidden>
         <h2>Exporting</h2>
         <div class="status-row">
           <div class="spinner" id="export-spinner"></div>
           <div>
-            <div id="export-text">Stitching segments...</div>
+            <div id="export-text">Rendering video with overlays...</div>
             <a id="download-link" hidden class="primary-btn-link">Download Video</a>
           </div>
         </div>

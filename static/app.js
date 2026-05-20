@@ -3,7 +3,6 @@ const state = {
   videoId: null,
   analysisId: null,
   duration: 0,
-  segments: [], // {start_s, end_s, is_on}
   media: [],
   analyses: [],
   pollingAnalyses: false,
@@ -11,13 +10,10 @@ const state = {
   knobs: null,
   defaultKnobs: null,
   videoUrl: null,
-  playMode: "free", // "free" | "segment"
-  segmentEndS: null, // when in segment mode, auto-pause at this time
   calibrationVideoId: null,
   calibrationPoints: [],
   ballTrajectory: [],
   ballAnalysisId: null,
-  ballVideoPath: null, // Path to ball trajectory MP4 video
   analysesEditMode: false, // Whether analyses table is in edit mode
   renderData: null,     // Full render data from artifact
   hitMoments: [],
@@ -437,7 +433,6 @@ async function pollBallAnalysis(ballAnalysisId, videoId) {
     
     if (ball) {
       if (ball.status === "done") {
-        // Ball analysis done
         sessionStorage.setItem("ballAnalysisVideoId", videoId);
         sessionStorage.setItem("ballAnalysisId", ballAnalysisId);
         
@@ -446,16 +441,7 @@ async function pollBallAnalysis(ballAnalysisId, videoId) {
           state.videoId = videoId;
           state.analysisId = ballAnalysisId;
           state.duration = media.duration_s || 0;
-          
-          state.segments = [{
-            start_s: 0,
-            end_s: media.duration_s || 0,
-            is_on: true,
-            source: "ball_trajectory",
-            decision_stage: "ball_analysis",
-          }];
-          
-          await loadEditorWithBallTrajectory(videoId, ballAnalysisId);
+          await loadEditor();
         }
         await refreshLibrary();
         return;
@@ -470,64 +456,7 @@ async function pollBallAnalysis(ballAnalysisId, videoId) {
   }
 }
 
-async function loadEditorWithBallTrajectory(videoId, ballAnalysisId) {
-  $("analyses-section").hidden = true;
-  state.pollingAnalyses = false;  // Stop any ongoing analysis polling
-  const [urlR, analysisR] = await Promise.all([
-    fetch(`/video-file/${videoId}`).then(r => r.json()),
-    fetch(`/analysis/${ballAnalysisId}`).then(r => r.ok ? r.json() : null).catch(() => null),
-  ]);
 
-  state.videoUrl = urlR.url;
-  state.analysisId = ballAnalysisId;
-
-  $("player").src = state.videoUrl;
-  $("editor-title").textContent = `Ball Trajectory Analysis`;
-  showOnly("editor-section");
-
-  // Setup canvas and player
-  setupCanvas();
-  setupPlayer();
-
-  // Setup resize observer for ball trail canvas
-  const ballCanvas = $("ball-trail-canvas");
-  if (ballCanvas) {
-    ballCanvas._resizeObserver?.disconnect();
-    ballCanvas._resizeObserver = new ResizeObserver(() => {
-      console.log("[BallTrail] Canvas resized, redrawing");
-      drawRenderOverlay();
-    });
-    ballCanvas._resizeObserver.observe(ballCanvas);
-  }
-
-  // Load ball trajectory data
-  await loadBallTrajectory();
-  await loadRenderData();
-
-  // Auto-enable ball trail display
-  $("ball-trail-toggle").checked = true;
-
-  // Wait for video to be ready before drawing
-  const video = $("player");
-  if (video.readyState >= 1) {
-    drawRenderOverlay();
-  } else {
-    video.addEventListener("loadedmetadata", () => {
-      console.log("[BallTrail] Video metadata loaded, drawing trail");
-      drawRenderOverlay();
-    }, { once: true });
-  }
-
-  // Show ball trail panel
-  const panel = $("ball-trail-panel");
-  if (panel) panel.hidden = false;
-
-  // 隐藏 Download button（分析不再渲染视频，由前端实时绘制）
-  const downloadBtn = $("download-ball-video-btn");
-  if (downloadBtn) downloadBtn.hidden = true;
-
-  renderAll();
-}
 
 async function deleteVideo(v) {
   if (!confirm(`Delete "${v.filename}" and all its segments / exports?`)) return;
@@ -883,14 +812,7 @@ async function openAnalysis(a) {
   state.analysisId = a.analysis_id;
   state.duration = a.duration_s || 0;
   $("editor-title").textContent = `${a.filename} • ${a.algorithm}`;
-
-  // For ball_tracking_yolo analysis, use the rendered video (with trajectory + speed overlays)
-  if (a.algorithm === "ball_tracking_yolo") {
-    state.ballAnalysisId = a.analysis_id;
-  } else {
-    state.ballAnalysisId = null;
-  }
-
+  state.ballAnalysisId = a.algorithm === "ball_tracking_yolo" ? a.analysis_id : null;
   await loadEditor();
 }
 
@@ -901,19 +823,13 @@ $("back-to-library-btn").addEventListener("click", async () => {
 
 async function loadEditor() {
   $("analyses-section").hidden = true;
-  state.pollingAnalyses = false;  // Stop any ongoing analysis polling
+  state.pollingAnalyses = false;
 
-  // 不再使用渲染视频，始终使用原始视频（分析不再渲染视频）
-  const urlR = await fetch(`/video-file/${state.videoId}`).then((r) => r.json());
-  videoUrl = urlR.url;
-
-  const [segR, analysisR] = await Promise.all([
-    fetch(`/analysis-segments/${state.analysisId}`).then((r) => r.json()),
+  const [urlR, analysisR] = await Promise.all([
+    fetch(`/video-file/${state.videoId}`).then((r) => r.json()),
     fetch(`/analysis/${state.analysisId}`).then((r) => r.ok ? r.json() : null),
   ]);
-  state.duration = segR.duration_s;
-  state.segments = segR.segments.map((s) => ({ ...s }));
-  state.videoUrl = videoUrl;
+  state.videoUrl = urlR.url;
   state.analysis = analysisR;
   state.knobs = analysisR ? { ...analysisR.knobs } : null;
   state.defaultKnobs = analysisR ? { ...analysisR.defaults } : null;
@@ -921,108 +837,35 @@ async function loadEditor() {
   $("player").src = state.videoUrl;
   showOnly("editor-section");
   renderAnalysisConfigs();
-  renderAll();
-  setupCanvas();
   setupPlayer();
   loadBallTrajectory();
   loadRenderData();
-}
 
-function renderAll() {
-  drawTimeline();
-  renderTable();
-  renderSummary();
-}
-
-function renderSummary() {
-  const onSegs = state.segments.filter((s) => s.is_on);
-  const onTotal = onSegs.reduce((a, s) => a + (s.end_s - s.start_s), 0);
-  $("summary").textContent =
-    `${onSegs.length} of ${state.segments.length} ON • ` +
-    `${fmt(onTotal)} of ${fmt(state.duration)} (${state.duration > 0 ? Math.round((onTotal / state.duration) * 100) : 0}%)`;
-}
-
-function renderTable() {
-  const tbody = $("segments-tbody");
-  tbody.innerHTML = "";
-  state.segments.forEach((seg, i) => {
-    const tr = document.createElement("tr");
-    if (!seg.is_on) tr.classList.add("off");
-
-    const idxTd = document.createElement("td");
-    idxTd.textContent = i + 1;
-
-    const onTd = document.createElement("td");
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = seg.is_on;
-    cb.addEventListener("change", () => {
-      seg.is_on = cb.checked;
-      renderAll();
+  // Setup resize observer for ball trail canvas
+  const ballCanvas = $("ball-trail-canvas");
+  if (ballCanvas) {
+    ballCanvas._resizeObserver?.disconnect();
+    ballCanvas._resizeObserver = new ResizeObserver(() => {
+      drawRenderOverlay();
     });
-    onTd.appendChild(cb);
+    ballCanvas._resizeObserver.observe(ballCanvas);
+  }
 
-    const startTd = numericCell(seg, "start_s", i);
-    const endTd = numericCell(seg, "end_s", i);
+  // Auto-enable ball trail display
+  $("ball-trail-toggle").checked = true;
 
-    const durTd = document.createElement("td");
-    durTd.textContent = fmt(seg.end_s - seg.start_s);
-
-    const scoreTd = document.createElement("td");
-    scoreTd.className = "score-cell";
-    scoreTd.textContent = formatScore(seg);
-
-    const stageTd = document.createElement("td");
-    stageTd.textContent = seg.decision_stage || "manual";
-
-    const actTd = document.createElement("td");
-    const playBtn = document.createElement("button");
-    playBtn.textContent = "▶ Preview";
-    playBtn.addEventListener("click", () => playSegment(i));
-    const delBtn = document.createElement("button");
-    delBtn.textContent = "✕";
-    delBtn.title = "Delete";
-    delBtn.style.marginLeft = "6px";
-    delBtn.addEventListener("click", () => {
-      state.segments.splice(i, 1);
-      renderAll();
-    });
-    actTd.appendChild(playBtn);
-    actTd.appendChild(delBtn);
-
-    tr.append(idxTd, onTd, startTd, endTd, durTd, scoreTd, stageTd, actTd);
-    tbody.appendChild(tr);
-  });
+  // Wait for video to be ready before drawing
+  const video = $("player");
+  if (video.readyState >= 1) {
+    drawRenderOverlay();
+  } else {
+    video.addEventListener("loadedmetadata", () => {
+      drawRenderOverlay();
+    }, { once: true });
+  }
 }
 
-function formatScore(seg) {
-  if (typeof seg.avg_score !== "number") return "—";
-  const min = typeof seg.min_score === "number" ? seg.min_score.toFixed(3) : "—";
-  const avg = seg.avg_score.toFixed(3);
-  const max = typeof seg.max_score === "number" ? seg.max_score.toFixed(3) : "—";
-  return `${avg} (${min}-${max})`;
-}
 
-function numericCell(seg, field, idx) {
-  const td = document.createElement("td");
-  const input = document.createElement("input");
-  input.type = "text";
-  input.value = fmtPrecise(seg[field]);
-  input.addEventListener("change", () => {
-    const parsed = parseTime(input.value);
-    if (parsed === null || parsed < 0 || parsed > state.duration) {
-      input.value = fmtPrecise(seg[field]);
-      return;
-    }
-    seg[field] = parsed;
-    if (seg.end_s <= seg.start_s) {
-      seg.end_s = Math.min(state.duration, seg.start_s + 0.1);
-    }
-    renderAll();
-  });
-  td.appendChild(input);
-  return td;
-}
 
 function parseTime(str) {
   // Accepts "M:SS.s" or seconds.
@@ -1066,94 +909,14 @@ function renderAnalysisConfigs() {
   }
 }
 
-// Timeline canvas ---------------------------------------------------------
-let canvas, ctx;
-function setupCanvas() {
-  canvas = $("timeline");
-  // Match canvas internal pixel size to its CSS width.
-  const ro = new ResizeObserver(() => {
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth;
-    canvas.width = w * dpr;
-    canvas.height = 56 * dpr;
-    ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawTimeline();
-  });
-  ro.observe(canvas);
 
-  canvas.addEventListener("click", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const t = (x / rect.width) * state.duration;
-    // Find segment under cursor.
-    const idx = state.segments.findIndex((s) => t >= s.start_s && t <= s.end_s);
-    if (idx >= 0 && e.shiftKey) {
-      // Shift+click: toggle on/off
-      state.segments[idx].is_on = !state.segments[idx].is_on;
-      renderAll();
-    } else {
-      // Plain click: seek video to that time
-      const player = $("player");
-      player.currentTime = t;
-      state.playMode = "free";
-    }
-  });
-}
-
-function drawTimeline() {
-  if (!ctx) return;
-  const w = canvas.clientWidth;
-  const h = 56;
-  ctx.clearRect(0, 0, w, h);
-
-  // Background.
-  ctx.fillStyle = "#eaeef2";
-  ctx.fillRect(0, 0, w, h);
-
-  if (state.duration <= 0) return;
-
-  // Draw segments.
-  for (const seg of state.segments) {
-    const x = (seg.start_s / state.duration) * w;
-    const segW = ((seg.end_s - seg.start_s) / state.duration) * w;
-    ctx.fillStyle = seg.is_on ? "#1a7f37" : "#b1bac4";
-    ctx.fillRect(x, 8, segW, h - 16);
-  }
-
-  // Tick marks every minute.
-  ctx.fillStyle = "#57606a";
-  ctx.font = "10px sans-serif";
-  for (let m = 0; m * 60 <= state.duration; m++) {
-    const x = ((m * 60) / state.duration) * w;
-    ctx.fillRect(x, 0, 1, 4);
-    if (m % 1 === 0) ctx.fillText(`${m}m`, x + 2, h - 2);
-  }
-
-  // Playhead.
-  const player = $("player");
-  if (player && isFinite(player.currentTime)) {
-    const x = (player.currentTime / state.duration) * w;
-    ctx.fillStyle = "#cf222e";
-    ctx.fillRect(x - 1, 0, 2, h);
-  }
-}
 
 // Player sync -------------------------------------------------------------
 function setupPlayer() {
   const player = $("player");
   player.addEventListener("timeupdate", () => {
-    drawTimeline();
     drawRenderOverlay();
     $("player-time").textContent = `${fmt(player.currentTime)} / ${fmt(state.duration)}`;
-
-    if (state.playMode === "segment" && state.segmentEndS !== null) {
-      if (player.currentTime >= state.segmentEndS) {
-        player.pause();
-        state.playMode = "free";
-        state.segmentEndS = null;
-      }
-    }
   });
 }
 
@@ -1205,177 +968,6 @@ async function loadBallTrajectory() {
     state.ballTrajectory = [];
     const panel = $("ball-trail-panel");
     if (panel) panel.hidden = true;
-  }
-}
-
-function drawBallTrail() {
-  const canvas = $("ball-trail-canvas");
-  if (!canvas) {
-    console.log("[BallTrail] Canvas not found");
-    return;
-  }
-  const toggle = $("ball-trail-toggle");
-  if (!toggle?.checked) {
-    console.log("[BallTrail] Toggle not checked");
-    return;
-  }
-
-  const ctx = canvas.getContext("2d");
-  const video = $("player");
-  if (!video) {
-    console.log("[BallTrail] Video not found");
-    return;
-  }
-  
-  const rect = video.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-
-  // Resize canvas to match video
-  const newW = Math.max(1, rect.width * dpr);
-  const newH = Math.max(1, rect.height * dpr);
-  if (canvas.width !== newW || canvas.height !== newH) {
-    canvas.width = newW;
-    canvas.height = newH;
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-
-  console.log("[BallTrail] drawBallTrail called, trajectory length:", state.ballTrajectory.length);
-
-  if (!state.ballTrajectory.length) {
-    console.log("[BallTrail] No trajectory data loaded, analysisId:", state.analysisId);
-    return;
-  }
-
-  // 计算视频在canvas中的实际显示区域（考虑object-fit: contain）
-  const canvasW = canvas.clientWidth;
-  const canvasH = canvas.clientHeight;
-  const videoW = video.videoWidth || 1920;
-  const videoH = video.videoHeight || 1080;
-  // 添加时间补偿来对齐轨迹（video.currentTime 有轻微延迟）
-  const timeOffset = 2 / 30; // 约0.067秒 = 2帧 @ 30fps
-  const currentTime = Math.min((video.currentTime || 0) + timeOffset, state.duration);
-
-  // 计算视频显示尺寸（保持宽高比）
-  const canvasRatio = canvasW / canvasH;
-  const videoRatio = videoW / videoH;
-  let displayW, displayH, offsetX, offsetY;
-
-  if (videoRatio > canvasRatio) {
-    // 视频更宽，以宽度为准
-    displayW = canvasW;
-    displayH = canvasW / videoRatio;
-    offsetX = 0;
-    offsetY = (canvasH - displayH) / 2;
-  } else {
-    // 视频更高，以高度为准
-    displayH = canvasH;
-    displayW = canvasH * videoRatio;
-    offsetX = (canvasW - displayW) / 2;
-    offsetY = 0;
-  }
-
-  console.log("[BallTrail] Drawing at time:", currentTime, "canvas:", canvasW, "x", canvasH, "display:", displayW, "x", displayH, "offset:", offsetX, offsetY);
-
-  // Get all detected points up to current time
-  const allDetectedPoints = state.ballTrajectory
-    .filter(p => p.x !== null && p.time_s <= currentTime)
-    .sort((a, b) => a.time_s - b.time_s);
-
-  if (allDetectedPoints.length === 0) {
-    // Show "no detection" indicator
-    ctx.fillStyle = "rgba(100, 100, 100, 0.5)";
-    ctx.font = "14px sans-serif";
-    ctx.fillText("No ball detected", 20, 30);
-    return;
-  }
-
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  // 拖尾效果：使用固定数量点 + 插值平滑
-  const trailDuration = 0.5; // 拖尾持续时间（秒）
-  const maxTrailPoints = 15; // 固定显示点数
-
-  // 筛选出在拖尾时间范围内的点
-  let trailPoints = allDetectedPoints
-    .filter(p => (currentTime - p.time_s) <= trailDuration)
-    .slice(-maxTrailPoints);
-
-  // 线性插值：添加当前时间的预测点使运动更平滑
-  if (trailPoints.length >= 2) {
-    const latest = trailPoints[trailPoints.length - 1];
-    const prev = trailPoints[trailPoints.length - 2];
-    const gap = latest.time_s - prev.time_s;
-
-    if (gap > 0) {
-      const t = (currentTime - latest.time_s) / gap;
-      if (t > 0 && t <= 1) {
-        // 在最新点和预测点之间插值
-        const interpX = latest.x + (latest.x - prev.x) * t * 0.5;
-        const interpY = latest.y + (latest.y - prev.y) * t * 0.5;
-        trailPoints.push({
-          time_s: currentTime,
-          x: interpX,
-          y: interpY
-        });
-      }
-    }
-  }
-
-  if (trailPoints.length >= 2) {
-    // 绘制连续轨迹线（光带效果）
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    for (let i = 1; i < trailPoints.length; i++) {
-      const p1 = trailPoints[i - 1];
-      const p2 = trailPoints[i];
-      const age = currentTime - p2.time_s;
-      const progress = Math.max(0, 1 - age / trailDuration); // 0-1，1是最新
-
-      // 计算渐变：头部亮，尾部淡
-      const alpha = progress * 0.9;
-      const lineWidth = 2 + progress * 6; // 2-8px
-
-      const x1 = offsetX + p1.x * displayW;
-      const y1 = offsetY + p1.y * displayH;
-      const x2 = offsetX + p2.x * displayW;
-      const y2 = offsetY + p2.y * displayH;
-
-      // 外发光
-      ctx.save();
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = `rgba(255, 200, 0, ${alpha * 0.8})`;
-      ctx.strokeStyle = `rgba(255, 220, 50, ${alpha})`;
-      ctx.lineWidth = lineWidth;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // 当前点高亮（使用插值后的位置）
-    const currentPoint = trailPoints[trailPoints.length - 1];
-    const bx = offsetX + currentPoint.x * displayW;
-    const by = offsetY + currentPoint.y * displayH;
-
-    // 大光晕
-    const gradient = ctx.createRadialGradient(bx, by, 0, bx, by, 25);
-    gradient.addColorStop(0, 'rgba(255, 255, 150, 0.9)');
-    gradient.addColorStop(0.3, 'rgba(255, 220, 50, 0.6)');
-    gradient.addColorStop(1, 'rgba(255, 150, 0, 0)');
-    ctx.beginPath();
-    ctx.arc(bx, by, 25, 0, Math.PI * 2);
-    ctx.fillStyle = gradient;
-    ctx.fill();
-
-    // 中心亮点
-    ctx.beginPath();
-    ctx.arc(bx, by, 5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 1)';
-    ctx.fill();
   }
 }
 
@@ -1658,32 +1250,25 @@ function drawBallTrailOnCtx(ctx, canvasW, canvasH, displayW, displayH, offsetX, 
   ctx.fill();
 }
 
-function playSegment(i) {
-  const seg = state.segments[i];
-  const player = $("player");
-  player.currentTime = seg.start_s;
-  state.playMode = "segment";
-  state.segmentEndS = seg.end_s;
-  player.play();
-}
-
 // Export ------------------------------------------------------------------
 $("export-btn").addEventListener("click", async () => {
-  const onSegs = state.segments.filter((s) => s.is_on);
-  if (onSegs.length === 0) {
-    alert("Select at least one segment to export.");
-    return;
-  }
   $("export-btn").disabled = true;
   $("export-section").hidden = false;
   $("download-link").hidden = true;
-  $("export-text").textContent = "Stitching segments...";
+  $("export-text").textContent = "Rendering video with overlays...";
   $("export-spinner").hidden = false;
+
+  // 导出全量视频范围
+  const segments = [{
+    start_s: 0,
+    end_s: state.duration,
+    is_on: true,
+  }];
 
   const r = await fetch(`/export/${state.videoId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ segments: state.segments }),
+    body: JSON.stringify({ segments }),
   });
   const data = await r.json();
   pollExport(data.export_id);
@@ -1723,12 +1308,4 @@ if (typeof window !== "undefined") {
   window.hideHelpPopover = hideHelpPopover;
 }
 
-// Download ball trajectory video button
-$("download-ball-video-btn")?.addEventListener("click", () => {
-  if (!state.analysisId) {
-    alert("No analysis selected");
-    return;
-  }
-  // Open video download in new tab
-  window.open(`/analysis/${state.analysisId}/ball-video`, "_blank");
-});
+

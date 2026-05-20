@@ -1,5 +1,24 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-20 16:45:00 (UTC+8)
+
+### chore: 移除前端分段切割功能
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| static/index.html | 移除 Timeline/Segments 卡片，Export 按钮简化 |
+| static/app.js | 移除所有分段相关函数、Timeline canvas、旧 drawBallTrail、loadEditorWithBallTrajectory |
+
+### 详细说明
+
+1. 移除：`state.segments`、`playMode`、`segmentEndS` 等状态；`renderTable()`、`renderSummary()`、`renderAll()`、`drawTimeline()`、`setupCanvas()`、`playSegment()`、`numericCell()`、`formatScore()`、`drawBallTrail()` 等函数
+2. 简化：`loadEditor()` 不再加载/渲染分段；`openAnalysis()` 简化；`setupPlayer()` 去除分段播放模式
+3. 保留：视频播放器 + canvas 覆盖层（轨迹/球速/跑动速度/击球火花）+ Export 按钮（导出全量视频）
+4. 共移除约 500 行代码
+
+---
+
 ## 2026-05-20 16:38:00 (UTC+8)
 
 ### refactor: 分析仅产 artifact + 前端 canvas 实时绘制 + 导出时渲染
