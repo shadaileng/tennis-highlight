@@ -1,10 +1,17 @@
+import asyncio
 import json
+import logging
 from pathlib import Path
 
+import subprocess
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from app.database import get_analysis_run, get_segments, get_segments_for_analysis, get_video, replace_segments
 from app.models import Segment, SegmentsResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -98,9 +105,70 @@ async def save_segments(video_id: str, payload: SegmentsResponse) -> SegmentsRes
 
 @router.get("/video-file/{video_id}")
 async def video_file_path(video_id: str) -> dict:
-    """Return the public URL of the original video file for the player."""
+    """Return the public URL of the video file for the player, transcoding to h.264 if needed."""
     video = await get_video(video_id)
     if video is None:
         raise HTTPException(404, "video not found")
-    name = Path(video["filepath"]).name
+
+    original = Path(video["filepath"])
+    browser_path = original.parent / f"{original.stem}_browser.mp4"
+
+    if not browser_path.exists():
+        # 检查视频编码
+        import subprocess
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name",
+             "-of", "default=noprint_wrappers=1", str(original)],
+            capture_output=True, text=True, timeout=10,
+        )
+        codec = result.stdout.strip().lower()
+
+        if codec and codec != "h264":
+            logger.info("Transcoding %s from %s to h.264 for browser playback...", original.name, codec)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(original),
+                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                     "-c:a", "aac", "-movflags", "+faststart",
+                     str(browser_path)],
+                    capture_output=True, text=True, timeout=600,
+                ),
+            )
+            logger.info("Transcoded %s → %s", original.name, browser_path.name)
+        else:
+            # 已经是 h.264，复制一份作为 browser 版本（跳过转码）
+            if not browser_path.exists() and codec == "h264":
+                import shutil
+                shutil.copy2(original, browser_path)
+
+    if browser_path.exists():
+        name = browser_path.name
+    else:
+        name = original.name
+
     return {"url": f"/uploads/{name}"}
+
+
+@router.get("/calibration-frame/{video_id}")
+async def calibration_frame(video_id: str) -> Response:
+    """提取视频首帧截图用于手动球场校准（跳过片头 1 秒）。"""
+    video = await get_video(video_id)
+    if video is None:
+        raise HTTPException(404, "video not found")
+
+    original = Path(video["filepath"])
+    if not original.exists():
+        raise HTTPException(404, "video file not found")
+
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(original), "-ss", "1",
+         "-vframes", "1", "-q:v", "2", "-f", "image2pipe", "-"],
+        capture_output=True, timeout=60,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise HTTPException(500, "failed to extract frame")
+
+    return Response(content=result.stdout, media_type="image/jpeg")

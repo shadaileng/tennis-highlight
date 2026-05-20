@@ -1,5 +1,25 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-20 20:50:00 (UTC+8)
+
+### refactor: 首帧截图代替视频播放器实现球场校准
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/routers/segments.py | 新增 `/calibration-frame/{video_id}` 端点，用 ffmpeg 提取首帧 JPEG 直接返回 |
+| static/index.html | 用 `<img>` 替换 `<video>`，移除标记模式切换按钮和提示 |
+| static/style.css | 新增 `#calibration-frame` 样式，移除视频和标记模式相关样式 |
+| static/app.js | 重写 `openCalibration`/`setupCalibrationCanvas` 基于 img，移除 `markMode`/`updateMarkModeUI` |
+
+### 详细说明
+
+1. 做了什么：彻底移除校准场景的 h.264 转码 + 视频播放器方案，改用 ffmpeg 提取视频首帧（跳过片头 1 秒）直接作为静态图片展示。用户点击图片即标记角点，无需切换播放/标记模式。
+2. 怎么做的：后端用 `ffmpeg -ss 1 -vframes 1 -f image2pipe -` 提取一帧返回 `image/jpeg`；前端 canvas 始终保持 pointer-events 自动接受点击，4 个点标满即止。
+3. 预期效果：不再需要等待完整视频转码才能进入校准界面；任何编码格式的视频都能立即显示首帧；交互简化（点哪标哪）。
+
+---
+
 ## 2026-05-20 11:30:00 (UTC+8)
 
 ### feat: 手动 4 角点 + Homography 替代 ResNet50 场地检测
