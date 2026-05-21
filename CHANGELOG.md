@@ -1,5 +1,25 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-21 12:00:00 (UTC+8)
+
+### feat: 后端渲染和前端 Canvas 均添加持久球场叠加层动画
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/pipeline/render_pipeline.py | CourtAnimationPass 新增 `_draw_persistent_court()` 方法，动画结束后持续绘制低透明度球场线 |
+| static/app.js | `drawRenderOverlay()` 新增球场绘制逻辑，新增 `drawCourtOnCtx()` 辅助函数 |
+
+### 详细说明
+
+1. **后端**：CourtAnimationPass 以前仅在视频开头 ~2 秒播放频闪动画，之后球场线条完全消失。现在动画结束后持续绘制低透明度 (alpha=0.15) 的球场叠加层，包括所有边线 (doubles/singles/发球区/球网) 和关键点，确保视频全程可见球场轮廓。
+
+2. **前端**：`drawRenderOverlay()` 中新增球场绘制，受 `opt-court-anim` 复选框控制。`drawCourtOnCtx()` 从 `state.courtCoordinates.original_keypoints` 读取 28 个像素坐标，归一化后映射到 Canvas 显示区域，绘制包含外层光晕 + 内层线条 + 角点圆点的半透明叠加层。
+
+3. 前后端球场边缘定义保持一致（18 条边线段），视觉效果统一。
+
+---
+
 ## 2026-05-20 16:45:00 (UTC+8)
 
 ### chore: 移除前端分段切割功能

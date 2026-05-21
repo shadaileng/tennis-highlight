@@ -617,6 +617,8 @@ class CourtAnimationPass(RenderPass):
         total_frames = appear_frames + strobe_frames + fade_frames
 
         if frame_idx >= total_frames:
+            # 动画结束后绘制持续低透明度球场叠加层
+            self._draw_persistent_court(frame, alpha=0.15)
             return frame
 
         alpha = 0.0
@@ -670,6 +672,22 @@ class CourtAnimationPass(RenderPass):
                 cv2.circle(frame, pt, 4, (255, 255, 255), -1)
 
         return frame
+
+    def _draw_persistent_court(self, frame: np.ndarray, alpha: float) -> None:
+        """绘制持久低透明度球场叠加层（动画结束后的持续显示）"""
+        if not self._segments:
+            return
+        base_color = (200, 220, 240)  # BGR 浅青色
+        for seg in self._segments:
+            p1, p2 = seg["p1"], seg["p2"]
+            overlay = frame.copy()
+            cv2.line(overlay, p1, p2, base_color, 3)
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        # 关键点
+        for pt in self._keypoints:
+            overlay = frame.copy()
+            cv2.circle(overlay, pt, 3, base_color, -1)
+            cv2.addWeighted(overlay, alpha * 0.6, frame, 1 - alpha * 0.6, 0, frame)
 
 
 # ============================================================

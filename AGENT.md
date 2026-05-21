@@ -251,7 +251,7 @@ class RenderPipeline:
 | `RunningSpeedPass` | 跑动速度连线 + 文本 | `running_speed` | True |
 | `SkeletonPass` | 青色骨骼关键点骨架 | `skeleton` | True |
 | `LandingMarkerPass` | 落地点黄色十字标记 | — | True |
-| `CourtAnimationPass` | 开场 1.5s 一笔画成球场动画 | `court_anim` | True |
+| `CourtAnimationPass` | 开场频闪动画 + 持久半透明球场叠加层 | `court_anim` | True |
 | `MiniCourtPass` | 右下角迷你球场俯视图 | — | True |
 
 ### 视频渲染器函数签名
@@ -279,7 +279,7 @@ def draw_ball_trajectory_video(
     "running_speed": True,    # 跑动速度连线
     "skeleton": True,         # 骨骼关键点
     "spark": True,            # 击球火花效果
-    "court_anim": True,       # 开场一笔画成球场动画（1.5s 绘制 + 0.5s 淡出）
+    "court_anim": True,       # 开场频闪动画（~2s）+ 持久半透明球场叠加层
 }
 ```
 
@@ -289,7 +289,7 @@ def draw_ball_trajectory_video(
 3. **跑动连线**：在起点和终点之间画黄色连线，中点显示 "P{n} XX m/s"（n=球员ID），持续约 1.0 秒
 4. **骨骼关键点**：近端球员 17 个 COCO 关键点，青色骨架（BGR: 0,255,200）+ 白色发光外线，关键点置信度 < 0.2 跳过；非检测帧使用上一帧有效骨骼延续显示
 5. **落地点标记**：球落地时在落地点绘制黄色十字标记 + 冲击波圆环扩散动画（0.5s）+ 地面投影阴影；基于球 Y 坐标的 Savgol 平滑 + find_peaks 检测落地时刻
-6. **球场动画**：开场 1.5s 一笔画成球场动画，从左上角出发依次绘制 doubles 外框 → singles 线 → 发球区 → 球网，已画线段淡青色常亮 + 绘制中笔尖黄色发光圆点，完成后 0.5s 淡出消失
+6. **球场动画**：开场约 2s 频闪动画（淡入→正弦波脉冲加速 3Hz→9Hz→淡出），动画结束后持续绘制低透明度 (alpha=0.15) 球场叠加层，包括 doubles 外框 → singles 线 → 发球区 → 球网 + 关键点圆点，确保全程可见球场轮廓。前端 Canvas 叠加层同样支持球场绘制（`drawCourtOnCtx()`），受同一 `court_anim` 复选框控制。
 7. **迷你球场**：右下角半透明深色卡片（280×340px），显示迷你俯视图（底线/边线/网线），球最近 60 帧轨迹映射到迷你球场，当前球位置高亮圆点
 
 ## 多球跟踪（feature/multi-ball-tracking 分支）

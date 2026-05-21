@@ -1034,6 +1034,11 @@ function drawRenderOverlay() {
   const currentTime = Math.min((video.currentTime || 0) + timeOffset, state.duration);
   const fps = 30;
 
+  // 0. 球场叠加层（半透明球场关键线）
+  if ($("opt-court-anim")?.checked && state.courtCoordinates?.original_keypoints) {
+    drawCourtOnCtx(ctx, displayW, displayH, offsetX, offsetY, videoW, videoH);
+  }
+
   // 1. 球轨迹（原有 drawBallTrail 逻辑）
   if ($("ball-trail-toggle")?.checked) {
     drawBallTrailOnCtx(ctx, canvasW, canvasH, displayW, displayH, offsetX, offsetY, currentTime);
@@ -1170,6 +1175,62 @@ function drawRenderOverlay() {
       }
     }
   }
+}
+
+// 球场叠加层绘制（供 drawRenderOverlay 调用）
+function drawCourtOnCtx(ctx, displayW, displayH, offsetX, offsetY, videoW, videoH) {
+  const kps = state.courtCoordinates.original_keypoints;
+  if (!kps || kps.length < 28) return;
+
+  // 将像素坐标转为归一化坐标，再映射到 canvas 显示区域
+  const pts = [];
+  for (let i = 0; i < 28; i += 2) {
+    pts.push({
+      x: offsetX + (kps[i] / videoW) * displayW,
+      y: offsetY + (kps[i + 1] / videoH) * displayH,
+    });
+  }
+
+  // 球场边缘定义（与后端 COURT_EDGES 一致）
+  const edges = [
+    [0, 2], [2, 3], [3, 1], [1, 0],            // 外围 doubles 矩形
+    [0, 4], [4, 5], [5, 7], [7, 6],            // singles 线
+    [6, 4],                                     // 上单打线
+    [4, 8], [8, 9], [9, 11], [11, 10],         // 发球区
+    [10, 12], [12, 13],                         // 球网
+  ];
+
+  ctx.save();
+  // 外层光晕
+  for (const [i1, i2] of edges) {
+    const p1 = pts[i1], p2 = pts[i2];
+    if (!p1 || !p2) continue;
+    ctx.strokeStyle = "rgba(180, 220, 255, 0.25)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
+  // 内层线条
+  for (const [i1, i2] of edges) {
+    const p1 = pts[i1], p2 = pts[i2];
+    if (!p1 || !p2) continue;
+    ctx.strokeStyle = "rgba(220, 240, 255, 0.45)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
+  // 关键点
+  ctx.fillStyle = "rgba(220, 240, 255, 0.5)";
+  for (const pt of pts) {
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // 从 drawBallTrail 抽取的轨迹绘制逻辑（供 drawRenderOverlay 调用）
