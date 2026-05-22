@@ -85,6 +85,7 @@ class SegmentsResponse(BaseModel):
 
 class ExportRequest(BaseModel):
     segments: list[Segment]
+    analysis_id: str | None = None
 
 
 class ExportResponse(BaseModel):

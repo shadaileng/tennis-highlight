@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS segments (
 CREATE TABLE IF NOT EXISTS exports (
     id              TEXT PRIMARY KEY,
     video_id        TEXT NOT NULL REFERENCES videos(id),
+    analysis_id     TEXT,
     status          TEXT NOT NULL DEFAULT 'pending',
     error_msg       TEXT,
     output_filepath TEXT,
@@ -189,6 +190,10 @@ async def init_db() -> None:
                 "UPDATE exports SET status='error', error_msg='Server restarted' "
                 "WHERE status IN ('pending', 'exporting')"
             )
+            # migration: exports 表添加 analysis_id 列
+            export_cols = {r[1] for r in conn.execute("PRAGMA table_info(exports)").fetchall()}
+            if "analysis_id" not in export_cols:
+                conn.execute("ALTER TABLE exports ADD COLUMN analysis_id TEXT")
             conn.commit()
     await asyncio.to_thread(_init)
 
@@ -741,14 +746,14 @@ async def get_segments_for_analysis(analysis_id: str) -> list[sqlite3.Row]:
 
 # ---- Exports -------------------------------------------------------------
 
-async def create_export(video_id: str) -> str:
+async def create_export(video_id: str, analysis_id: str | None = None) -> str:
     export_id = uuid4().hex
 
     def _q():
         with _connect() as conn:
             conn.execute(
-                "INSERT INTO exports (id, video_id, status, created_at) VALUES (?, ?, 'pending', ?)",
-                (export_id, video_id, _now()),
+                "INSERT INTO exports (id, video_id, analysis_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                (export_id, video_id, analysis_id, _now()),
             )
             conn.commit()
     await asyncio.to_thread(_q)
@@ -761,6 +766,21 @@ async def get_export(export_id: str):
             return conn.execute(
                 "SELECT * FROM exports WHERE id=?", (export_id,)
             ).fetchone()
+    return await asyncio.to_thread(_q)
+
+
+async def list_exports_by_video_and_analysis(video_id: str, analysis_id: str | None = None) -> list[dict]:
+    def _q():
+        with _connect() as conn:
+            if analysis_id:
+                return conn.execute(
+                    "SELECT * FROM exports WHERE video_id=? AND analysis_id=? ORDER BY created_at DESC",
+                    (video_id, analysis_id),
+                ).fetchall()
+            return conn.execute(
+                "SELECT * FROM exports WHERE video_id=? ORDER BY created_at DESC",
+                (video_id,),
+            ).fetchall()
     return await asyncio.to_thread(_q)
 
 

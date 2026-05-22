@@ -831,6 +831,7 @@ async function loadEditor() {
   setupPlayer();
   loadBallTrajectory();
   loadRenderData();
+  checkExistingExport();
 
   // Setup resize observer for ball trail canvas
   const ballCanvas = $("ball-trail-canvas");
@@ -1302,6 +1303,27 @@ function drawBallTrailOnCtx(ctx, canvasW, canvasH, displayW, displayH, offsetX, 
   ctx.fill();
 }
 
+// Check existing export ---------------------------------------------------
+async function checkExistingExport() {
+  if (!state.videoId || !state.analysisId) return;
+  try {
+    const r = await fetch(`/exports-by-analysis/${state.analysisId}?video_id=${state.videoId}`);
+    const exports = await r.json();
+    const doneExport = exports.find(e => e.status === "done");
+    if (doneExport) {
+      $("export-section").hidden = false;
+      $("export-btn").disabled = false;
+      $("export-spinner").hidden = true;
+      $("export-text").textContent = `Done — ${fmt(doneExport.duration_s || 0)} of footage`;
+      $("download-link").href = `/download/${doneExport.export_id}`;
+      $("download-link").textContent = "Download Video";
+      $("download-link").hidden = false;
+    }
+  } catch (e) {
+    console.warn("[Export] Failed to check existing exports:", e.message);
+  }
+}
+
 // Export ------------------------------------------------------------------
 $("export-btn").addEventListener("click", async () => {
   $("export-btn").disabled = true;
@@ -1320,7 +1342,7 @@ $("export-btn").addEventListener("click", async () => {
   const r = await fetch(`/export/${state.videoId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ segments }),
+    body: JSON.stringify({ segments, analysis_id: state.analysisId }),
   });
   const data = await r.json();
   pollExport(data.export_id);

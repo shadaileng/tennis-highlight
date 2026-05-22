@@ -1,5 +1,26 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-22 11:30:00 (UTC+8)
+
+### feat: 导出关联分析记录 + 显示已有导出下载按钮
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/models.py | ExportRequest 添加 `analysis_id` 字段 |
+| app/database.py | exports 表添加 `analysis_id` 列；`create_export` 接收 `analysis_id`；新增 `list_exports_by_video_and_analysis` |
+| app/routers/export.py | 传递 `analysis_id` 到 `create_export` 和 `run_export`；新增 `/exports-by-analysis/{analysis_id}` 接口 |
+| app/pipeline/orchestrator.py | `run_export` 优先使用传入的 `analysis_id` 而非随机搜索任何 ball_tracking 分析 |
+| static/app.js | 导出时传递 `analysis_id`；`loadEditor` 时检查已有导出并显示下载按钮 |
+
+### 详细说明
+
+1. **下载按钮问题**：此前已完成导出的视频再次打开编辑器时没有下载按钮，必须重新导出。新增 `checkExistingExport()` 在 `loadEditor()` 时自动查询该分析记录的已完成导出并显示下载链接。
+
+2. **分析关联问题**：此前导出的渲染视频会随机使用该视频下的任意一个 done 的 ball_tracking 分析，与用户在编辑器中打开的分析记录可能不一致。现在 `ExportRequest` 包含 `analysis_id`，`run_export` 优先使用传入的特定分析进行渲染。
+
+---
+
 ## 2026-05-22 11:00:00 (UTC+8)
 
 ### fix: 保存球场校准后分析列表被隐藏

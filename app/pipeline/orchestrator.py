@@ -192,7 +192,7 @@ async def run_analysis(analysis_id: str) -> None:
         await update_analysis_status(analysis_id, "error", error_msg=str(e))
 
 
-async def run_export(export_id: str, video_id: str, segments: list[dict]) -> None:
+async def run_export(export_id: str, video_id: str, analysis_id: str | None, segments: list[dict]) -> None:
     """Background task: stitch user-selected segments into a final video.
     If a ball_tracking_yolo analysis exists for this video, render with
     artifact overlays before cutting segments.
@@ -220,13 +220,19 @@ async def run_export(export_id: str, video_id: str, segments: list[dict]) -> Non
 
         output_path = settings.exports_dir / f"{export_id}.mp4"
 
-        # 检查是否有 ball_tracking_yolo 分析，有则用 artifact 渲染再剪切
-        all_analyses = await list_analysis_runs()
-        ball_analysis = next(
-            (a for a in all_analyses
-             if a["video_id"] == video_id and a["algorithm"] == BALL_ALGORITHM and a["status"] == "done"),
-            None
-        )
+        # 使用传入的 analysis_id，若未指定则回退到该视频的 ball_tracking_yolo 分析
+        ball_analysis = None
+        if analysis_id:
+            analysis = await get_analysis_run(analysis_id)
+            if analysis and analysis["status"] == "done" and analysis.get("artifact_path"):
+                ball_analysis = analysis
+        if ball_analysis is None:
+            all_analyses = await list_analysis_runs()
+            ball_analysis = next(
+                (a for a in all_analyses
+                 if a["video_id"] == video_id and a["algorithm"] == BALL_ALGORITHM and a["status"] == "done"),
+                None
+            )
 
         if ball_analysis and ball_analysis["artifact_path"]:
             # 先渲染完整视频（带覆盖层）
