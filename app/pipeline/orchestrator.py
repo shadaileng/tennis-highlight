@@ -224,7 +224,7 @@ async def run_export(export_id: str, video_id: str, analysis_id: str | None, seg
         ball_analysis = None
         if analysis_id:
             analysis = await get_analysis_run(analysis_id)
-            if analysis and analysis["status"] == "done" and analysis.get("artifact_path"):
+            if analysis and analysis["status"] == "done" and analysis["artifact_path"]:
                 ball_analysis = analysis
         if ball_analysis is None:
             all_analyses = await list_analysis_runs()
