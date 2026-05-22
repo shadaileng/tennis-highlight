@@ -1,5 +1,22 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-22 10:52:00 (UTC+8)
+
+### fix: 旧导出数据 analysis_id 为 NULL 导致下载按钮不显示 + 前端状态残留
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/database.py | `list_exports_by_video_and_analysis` 查询新增 `OR analysis_id IS NULL` 兼容旧数据 |
+| static/app.js | `loadEditor()` 每次进入先重置导出区状态；`checkExistingExport()` 增加 `!r.ok` 和 `Array.isArray` 保护 |
+
+### 详细说明
+
+1. **旧导出不显示问题**：之前添加的 `analysis_id` 列，旧导出记录该字段为 `NULL`，但查询用 `WHERE analysis_id=?` 严格匹配，导致查不到结果。改为 `WHERE analysis_id=? OR analysis_id IS NULL` 兼容旧数据。
+2. **前端状态残留**：切换分析记录时导出区状态（visible + 旧下载链接）未重置，导致 API 异常时仍显示错误的下载按钮。`loadEditor()` 中每次先隐藏导出区再查询。
+
+---
+
 ## 2026-05-22 10:46:00 (UTC+8)
 
 ### feat: 导出关联分析记录 + 显示已有导出下载按钮

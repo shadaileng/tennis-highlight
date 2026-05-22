@@ -831,6 +831,10 @@ async function loadEditor() {
   setupPlayer();
   loadBallTrajectory();
   loadRenderData();
+  // 每次加载编辑器时重置导出区状态，避免残留上个分析的导出链接
+  $("export-section").hidden = true;
+  $("download-link").hidden = true;
+  $("export-btn").disabled = false;
   checkExistingExport();
 
   // Setup resize observer for ball trail canvas
@@ -1308,7 +1312,9 @@ async function checkExistingExport() {
   if (!state.videoId || !state.analysisId) return;
   try {
     const r = await fetch(`/exports-by-analysis/${state.analysisId}?video_id=${state.videoId}`);
+    if (!r.ok) return;
     const exports = await r.json();
+    if (!Array.isArray(exports)) return;
     const doneExport = exports.find(e => e.status === "done");
     if (doneExport) {
       $("export-section").hidden = false;

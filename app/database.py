@@ -773,8 +773,9 @@ async def list_exports_by_video_and_analysis(video_id: str, analysis_id: str | N
     def _q():
         with _connect() as conn:
             if analysis_id:
+                # 同时匹配新导出（有 analysis_id）和旧导出（analysis_id IS NULL）
                 return conn.execute(
-                    "SELECT * FROM exports WHERE video_id=? AND analysis_id=? ORDER BY created_at DESC",
+                    "SELECT * FROM exports WHERE video_id=? AND (analysis_id=? OR analysis_id IS NULL) ORDER BY created_at DESC",
                     (video_id, analysis_id),
                 ).fetchall()
             return conn.execute(
