@@ -178,6 +178,10 @@ async def init_db() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_segments_analysis ON segments(analysis_id, sort_order)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_analyses_video ON analyses(video_id, created_at)")
             _migrate_existing_video_segments_to_analyses(conn)
+            # 清理旧版迁移产生的僵尸 pending 分析记录（progress_message IS NULL）
+            conn.execute(
+                "DELETE FROM analyses WHERE status='pending' AND progress_message IS NULL"
+            )
             conn.execute(
                 "UPDATE videos SET status='pending' WHERE status IN ('analyzing')"
             )
@@ -193,6 +197,20 @@ def _now() -> float:
     return time.time()
 
 
+def _infer_algorithm_from_knobs(knobs_json: str | None) -> str:
+    """从 analysis_knobs_json 中推断使用的检测算法"""
+    if not knobs_json:
+        return "median_frame"
+    try:
+        knobs = json.loads(knobs_json)
+        detector = knobs.get("detector", "")
+        if detector in {"median_frame", "median_court_roi", "pose_skeleton_yolo", "ball_tracking_yolo"}:
+            return detector
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return "median_frame"
+
+
 def _migrate_existing_video_segments_to_analyses(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         """
@@ -206,10 +224,14 @@ def _migrate_existing_video_segments_to_analyses(conn: sqlite3.Connection) -> No
         """
     ).fetchall()
     for row in rows:
+        # 仅迁移已完成的视频，跳过 pending/analyzing/error 避免产生僵尸分析记录
+        if row["status"] != "done":
+            continue
+
         analysis_id = row["analysis_id"] or uuid4().hex
         exists = conn.execute("SELECT id FROM analyses WHERE id=?", (analysis_id,)).fetchone()
         if exists is None:
-            status = "done" if row["status"] == "done" else "pending"
+            algorithm = _infer_algorithm_from_knobs(row["analysis_knobs_json"])
             conn.execute(
                 """
                 INSERT INTO analyses (
@@ -217,16 +239,14 @@ def _migrate_existing_video_segments_to_analyses(conn: sqlite3.Connection) -> No
                     instant_knobs_json, progress_percent, progress_message,
                     created_at, updated_at
                 )
-                VALUES (?, ?, 'median_frame', ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 'done', ?, ?, 100.0, 'migrated', ?, ?)
                 """,
                 (
                     analysis_id,
                     row["id"],
-                    status,
+                    algorithm,
                     row["analysis_artifact_path"],
                     row["analysis_knobs_json"],
-                    100.0 if status == "done" else 0.0,
-                    "migrated" if status == "done" else None,
                     row["created_at"],
                     row["updated_at"] or row["created_at"],
                 ),

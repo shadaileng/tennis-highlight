@@ -1,5 +1,25 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-22 10:30:00 (UTC+8)
+
+### fix: 修复数据库迁移产生僵尸 pending 分析记录
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| app/database.py | `_migrate_existing_video_segments_to_analyses` 改为仅迁移 "done" 视频 + 新增 `_infer_algorithm_from_knobs()` 推断正确算法 + 启动时清理已有僵尸记录 |
+
+### 详细说明
+
+1. **问题**：旧迁移函数对所有含 segments 的视频（无论 status）都硬编码 `algorithm='median_frame'` 创建分析记录，非 "done" 的视频留下一堆永远 pending 的僵尸记录。
+2. **修复**：
+   - 仅处理 `status='done'` 的视频，跳过 `pending/analyzing/error`
+   - `_infer_algorithm_from_knobs()` 从 `analysis_knobs_json` 中读取 `detector` 字段推断正确算法
+   - 启动时执行 `DELETE FROM analyses WHERE status='pending' AND progress_message IS NULL` 清除已有僵尸记录
+3. **效果**：数据库不再产生幽灵 pending 分析记录，前端展示更干净。
+
+---
+
 ## 2026-05-21 12:00:00 (UTC+8)
 
 ### feat: 后端渲染和前端 Canvas 均添加持久球场叠加层动画
