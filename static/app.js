@@ -584,16 +584,7 @@ $("save-calibration-btn").addEventListener("click", async () => {
     return;
   }
   await refreshLibrary();
-  // 返回 library 并提示 Homography 已启用
-  showOnly("library-section");
-  setTimeout(() => {
-    const statusEl = document.getElementById("status-text");
-    if (statusEl) {
-      statusEl.textContent = "✅ 球场校准已保存。后续球轨迹分析将使用手动校准（Homography），精度更高。";
-      statusEl.style.color = "#1a7f37";
-      setTimeout(() => { statusEl.style.color = ""; }, 5000);
-    }
-  }, 100);
+  // refreshLibrary() 已处理 section 显示，无需额外 showOnly
 });
 
 $("close-calibration-btn").addEventListener("click", refreshLibrary);

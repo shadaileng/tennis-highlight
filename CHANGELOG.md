@@ -1,5 +1,22 @@
 # 开发日志 (CHANGELOG)
 
+## 2026-05-22 11:00:00 (UTC+8)
+
+### fix: 保存球场校准后分析列表被隐藏
+
+修改文件：
+| 文件 | 修改内容 |
+|------|----------|
+| static/app.js | `save-calibration-btn` 回调中移除多余的 `showOnly("library-section")` |
+
+### 详细说明
+
+1. **问题**：保存球场校准后，`refreshLibrary()` 已正确显示 library + analyses 两个 section，但紧接着第 588 行 `showOnly("library-section")` 覆盖了 section 状态，将 `analyses-section` 隐藏。
+2. **修复**：删除第 588 行多余的 `showOnly` 调用。
+3. **效果**：保存球场校准后返回主界面，视频列表和分析列表均正常显示。
+
+---
+
 ## 2026-05-22 10:30:00 (UTC+8)
 
 ### fix: 修复数据库迁移产生僵尸 pending 分析记录
